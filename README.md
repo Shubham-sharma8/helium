@@ -5,11 +5,24 @@
 
   <p>
     <a href="https://cogify.me/helium"><img src="https://img.shields.io/badge/Website-cogify.me%2Fhelium-007AFF?style=flat-square" alt="Website" /></a>
+    <a href="WHATS_NEW.md"><img src="https://img.shields.io/badge/Release-v0.0.2-5856D6?style=flat-square" alt="Release v0.0.2" /></a>
     <img src="https://img.shields.io/badge/Platform-macOS%2015.4%2B-111111?style=flat-square&logo=apple" alt="macOS 15.4+" />
     <img src="https://img.shields.io/badge/Swift-6.0-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift 6.0" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-34C759?style=flat-square" alt="MIT License" /></a>
   </p>
 </div>
+
+---
+
+## What's New in v0.0.2
+
+- **25+ Cloud & Self-Hosted Storage Presets (`StorageServicePreset`)**: Connect **Google Drive Pool**, **Amazon S3**, **Cloudflare R2**, **Backblaze B2**, **Wasabi**, **Hetzner**, **DigitalOcean Spaces**, **Storj**, **Tigris**, **Google Cloud Storage (HMAC)**, **Nextcloud / ownCloud / Fastmail / pCloud / Synology WebDAV**, **SFTP / rsync.net**, **SMB / Local NAS**, **Dropbox / OneDrive / Box (BYOK)**, and **External USB/Thunderbolt SSDs**.
+- **Scheduled Add-Only Mac Folder Backups (`⌘⇧K`)**: Protect `~/Desktop`, `~/Documents`, `~/Pictures`, or any project workspace on an Hourly, Daily, Weekly, or Manual schedule with live exclusion-savings previews, `Skip on Personal Hotspot`, 14-run history dots, and add-only safety.
+- **Time Travel Snapshots & "Then vs. Now" Diffs (`⌘⇧Y`)**: Capture instant point-in-time pool snapshots, compare `Deleted since then`, `Changed since then`, and `Added after snapshot` badges, and 1-click **Restore Copy** or **Restore Version** alongside the 30-day Recycle Bin.
+- **5-Step Safe-Write Canary Check**: Verify server RTT latency (`ms`), TLS 1.3 certificate chain, authentication, cryptographic `SHA-256` canary write/readback, and zero-residue cleanup.
+- **Right-Hand File Inspector, Conflict Resolver & Privacy Contact Map**: Inspect *"Where it lives"*, resolve two-Mac edit conflicts non-destructively (**Keep Both** or **Use Newer**), monitor live dual-series throughput (`MB/s`), and audit every network host contacted in `Settings → Privacy`.
+
+See the full release notes in [`WHATS_NEW.md`](WHATS_NEW.md).
 
 ---
 
@@ -96,25 +109,27 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a deep dive into the stor
 ```text
 .
 ├── Package.swift                 # Swift Package Manager manifest (Swift 6.0 / macOS 15.4+)
+├── WHATS_NEW.md                  # Release notes & changelog for v0.0.2
 ├── Helium.xcodeproj/             # Xcode project for macOS app & targets
 ├── Config/                       # Info.plist & entitlements (Direct Distribution & App Store)
 ├── Resources/                    # App icons, Assets.xcassets, Help Book, PrivacyInfo.xcprivacy
 ├── Sources/
-│   ├── OrbitCore/                # Core storage, VFS tree, crypto, and Google Drive Pool engine
+│   ├── OrbitCore/                # Core storage, VFS tree, crypto, backups, snapshots, and Drive Pool engine
 │   │   ├── Concurrency/          # Async primitives, RWLock, KeyedMutex, SingleFlight
 │   │   ├── Container/            # Shared container, XPC mount protocol, Keychain secret store
 │   │   ├── Crypto/               # Client-side AES-256-GCM & P-256 zero-knowledge encryption (ZK)
-│   │   ├── Drive/                # DriveTree, ChunkStore, ContentReader, OrbitDrive, UploadGovernor
+│   │   ├── Drive/                # DriveTree, ChunkStore, ContentReader, BackupAndTimeTravelEngine, UploadGovernor
 │   │   └── Remote/               # PooledGoogleDriveRemote, StoragePoolAllocator, FirebaseConfig
-│   ├── HeliumApp/                # Native SwiftUI macOS app, menu bar popover, OAuth PKCE, VFS server
+│   ├── HeliumApp/                # Native SwiftUI macOS app, StatusKit, Backups & Time Travel UI, VFS server
 │   ├── HeliumOpener/             # Helper app for double-clicking 0-byte sparse placeholders in Finder
 │   ├── OrbitFS/                  # FSKit unary filesystem module
 │   ├── OrbitFinder/              # FinderSync context-menu & badge extension
 │   └── OrbitMountHelper/         # Volume mount helper
 ├── Tests/
-│   └── OrbitCoreTests/           # Unit & integration test suite (pool striping, crypto, LRU cache, VFS)
+│   └── OrbitCoreTests/           # Unit & integration test suite (pool striping, backups, snapshots, crypto, VFS)
 ├── scripts/
 │   ├── build-app-bundle.sh       # Builds & packages Helium.app locally
+│   ├── build-signed-dmg.sh       # Builds Release Helium.app and Apple-signed Drag-and-Drop DMG installer
 │   └── archive-appstore.sh       # Builds Release .xcarchive, .pkg, and .dmg
 └── docs/
     └── ARCHITECTURE.md           # Detailed system design & cryptographic specification
@@ -132,7 +147,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a deep dive into the stor
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/shubhamsharma/helium.git
+git clone https://github.com/Shubham-sharma8/helium.git
 cd helium
 ```
 
