@@ -177,9 +177,35 @@ struct OrbitApp: App {
                 }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
 
+                Button("Connect S3 / Cloudflare R2 / WebDAV / NAS Storage…") {
+                    model.navigateToMainWindow(destination: .pool)
+                    model.showMultiProtocolConnectSheet = true
+                }
+
                 Divider()
 
-                Button("Global Spotlight Search…") {
+                Button("Activity & Safe-Write Health…") {
+                    model.navigateToMainWindow(destination: .activity)
+                }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+
+                Button("Scheduled Mac Folder Backups…") {
+                    model.navigateToMainWindow(destination: .backups)
+                }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+
+                Button("Time Travel & Pool Snapshots…") {
+                    model.navigateToMainWindow(destination: .timeTravel)
+                }
+                .keyboardShortcut("y", modifiers: [.command, .shift])
+
+                Button("Capture Time Travel Snapshot Now") {
+                    model.takePoolSnapshot(title: "Menu Snapshot")
+                }
+
+                Divider()
+
+                Button("Command Palette & Search…") {
                     model.navigateToMainWindow(destination: .search)
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])

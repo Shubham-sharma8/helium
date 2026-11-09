@@ -28,8 +28,17 @@ public struct MainDashboardView: View {
                         Divider()
                     }
                     VStack(spacing: 0) {
-                        detailContent
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        HStack(spacing: 0) {
+                            detailContent
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            if model.showRightInspector && (model.selectedSidebarDestination == .home || model.selectedSidebarDestination == .pool) {
+                                Divider()
+                                HeliumRightFilesInspectorDrawer(
+                                    model: model,
+                                    node: model.selectedInspectorNode ?? model.driveNodes.first
+                                )
+                            }
+                        }
                         if !model.statusMessage.isEmpty || !model.trashedItems.isEmpty || model.isSyncingPool {
                             Divider()
                             HStack(spacing: 10) {
@@ -84,8 +93,21 @@ public struct MainDashboardView: View {
                         }
                         .help(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
                     }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            withAnimation(HeliumSpring.snappy) {
+                                model.showRightInspector.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "sidebar.right")
+                        }
+                        .help(model.showRightInspector ? "Hide File Inspector" : "Show File Inspector")
+                    }
                 }
             }
+        }
+        .sheet(isPresented: $model.showMultiProtocolConnectSheet) {
+            MultiProtocolStorageConnectSheet(model: model)
         }
         .sheet(isPresented: $model.showStartupPreferencesPrompt) {
             StartupTaskbarPromptSheet(model: model)
@@ -217,8 +239,23 @@ public struct MainDashboardView: View {
                         )
                         sidebarNavButton(
                             .pool,
-                            badgeText: "\(model.linkedAccounts.count)",
+                            badgeText: "\(model.linkedAccounts.count + model.externalStorageConnections.count)",
                             badgeTinted: true
+                        )
+                        sidebarNavButton(
+                            .activity,
+                            badgeText: model.actionableIssues.isEmpty ? nil : "\(model.actionableIssues.count)",
+                            badgeTinted: !model.actionableIssues.isEmpty
+                        )
+                        sidebarNavButton(
+                            .backups,
+                            badgeText: model.backupJobs.isEmpty ? nil : "\(model.backupJobs.count)"
+                        )
+                        sidebarNavButton(
+                            .timeTravel,
+                            badgeText: (model.poolSnapshots.count + model.trashedItems.count) == 0
+                                ? nil
+                                : "\(model.poolSnapshots.count + model.trashedItems.count)"
                         )
                         sidebarNavButton(.search)
                     }
@@ -323,6 +360,15 @@ public struct MainDashboardView: View {
                 .transition(.opacity)
             case .pool:
                 GoogleDrivePoolWorkspaceView(model: model)
+                    .transition(.opacity)
+            case .activity:
+                HeliumActivityAndHealthWorkspaceView(model: model)
+                    .transition(.opacity)
+            case .backups:
+                HeliumMacBackupsWorkspaceView(model: model)
+                    .transition(.opacity)
+            case .timeTravel:
+                HeliumTimeTravelWorkspaceView(model: model)
                     .transition(.opacity)
             case .search:
                 OriginalSpotlightSearchView(model: model)
@@ -2553,6 +2599,16 @@ struct GoogleDrivePoolWorkspaceView: View {
                             .fixedSize()
                             .help("Configure Placement Engine, Upload Priority & Rebalancer in Settings")
 
+                            Button {
+                                model.showMultiProtocolConnectSheet = true
+                            } label: {
+                                Label("+ Connect S3 / WebDAV / NAS", systemImage: "shippingbox.and.arrow.backward.fill")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .fixedSize()
+                            .help("Connect S3, Cloudflare R2, Backblaze B2, WebDAV/Nextcloud, Hetzner Storage Box, SMB, or External SSD")
+
                             SignInWithGoogleButton(
                                 title: "+ Add Google Drive",
                                 style: .standard,
@@ -2566,6 +2622,46 @@ struct GoogleDrivePoolWorkspaceView: View {
                         // Unified Multi-Account Segmented Storage Bar
                         MultiAccountSegmentedBar(accounts: model.linkedAccounts, totalCapacity: model.totalPoolBytes)
                             .frame(height: 10)
+
+                        if !model.externalStorageConnections.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Connected Multi-Protocol Storage Providers (\(model.externalStorageConnections.count))")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.secondary)
+                                ForEach(model.externalStorageConnections) { ext in
+                                    HStack(spacing: 10) {
+                                        Image(systemName: ext.protocolKind.symbol)
+                                            .foregroundStyle(.indigo)
+                                        Text(ext.name)
+                                            .font(.caption.bold())
+                                        Text(ext.protocolKind.title)
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 1)
+                                            .background(Capsule().fill(Color.indigo.opacity(0.14)))
+                                            .foregroundStyle(.indigo)
+                                        Text("• \(ext.host) • \(ext.lastLatencyMs) ms • \(ext.tlsVersion)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        HeliumFileStateBadge(kind: .verifiedZeroBytes)
+                                        Button(role: .destructive) {
+                                            model.removeExternalStorageConnection(id: ext.id)
+                                        } label: {
+                                            Image(systemName: "trash")
+                                                .font(.caption)
+                                        }
+                                        .buttonStyle(.borderless)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(Color(nsColor: .windowBackgroundColor))
+                                    )
+                                }
+                            }
+                        }
 
                         // Per-Account Storage Breakdown Rows
                         VStack(alignment: .leading, spacing: 8) {
@@ -2700,6 +2796,91 @@ struct OriginalSpotlightSearchView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Syncophant-Style Executable Command Palette Quick Actions
+            HeliumGlassCard(cornerRadius: 12, padding: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("Command Palette Actions (1-Click Execute)", systemImage: "command.square.fill")
+                            .font(.caption.bold())
+                            .foregroundStyle(.blue)
+                        Spacer()
+                        if !model.lastCommandConfirmation.isEmpty {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text(model.lastCommandConfirmation)
+                            }
+                            .font(.caption2.bold())
+                            .foregroundStyle(.green)
+                        }
+                    }
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            commandPaletteActionButton(
+                                title: "Take Pool Snapshot",
+                                symbol: "camera.aperture"
+                            ) {
+                                model.takePoolSnapshot(title: "Quick Palette Snapshot")
+                                model.lastCommandConfirmation = "Snapshot captured"
+                            }
+
+                            commandPaletteActionButton(
+                                title: "Run All Mac Backups",
+                                symbol: "clock.arrow.circlepath"
+                            ) {
+                                Task { await model.runAllBackupsNow() }
+                                model.lastCommandConfirmation = "Running scheduled backups"
+                            }
+
+                            commandPaletteActionButton(
+                                title: "5-Step Safe-Write Check",
+                                symbol: "checkmark.shield.fill"
+                            ) {
+                                Task {
+                                    await model.runSafeWriteVerification(
+                                        targetName: model.linkedAccounts.first?.email ?? "Helium Pool",
+                                        host: "www.googleapis.com"
+                                    )
+                                }
+                                model.lastCommandConfirmation = "Safe-Write SHA-256 verified"
+                            }
+
+                            commandPaletteActionButton(
+                                title: "Connect S3 / R2 / WebDAV / NAS",
+                                symbol: "shippingbox.and.arrow.backward.fill"
+                            ) {
+                                model.showMultiProtocolConnectSheet = true
+                            }
+
+                            commandPaletteActionButton(
+                                title: model.isUploadsPaused ? "Resume Transfers" : "Pause Transfers",
+                                symbol: model.isUploadsPaused ? "play.fill" : "pause.fill"
+                            ) {
+                                model.isUploadsPaused.toggle()
+                                model.lastCommandConfirmation = model.isUploadsPaused ? "Transfers paused" : "Transfers resumed"
+                            }
+
+                            commandPaletteActionButton(
+                                title: "Rebalance Pool",
+                                symbol: "arrow.left.arrow.right.circle.fill"
+                            ) {
+                                Task { await model.rebalancePool() }
+                                model.lastCommandConfirmation = "Rebalancing pool"
+                            }
+
+                            commandPaletteActionButton(
+                                title: "Undo Last Delete (⌘Z)",
+                                symbol: "arrow.uturn.backward.circle.fill"
+                            ) {
+                                model.undoLastDelete()
+                                model.lastCommandConfirmation = "Restored from 30-Day Trash"
+                            }
+                        }
+                    }
+                }
+            }
+
             if model.searchResults.isEmpty {
                 VStack(spacing: 10) {
                     HeliumAnimatedMascot(name: "HeliumHappy", size: 58)
@@ -2758,6 +2939,25 @@ struct OriginalSpotlightSearchView: View {
             }
         }
         .padding(20)
+    }
+
+    private func commandPaletteActionButton(title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.caption.bold())
+                    .foregroundStyle(.blue)
+                Text(title)
+                    .font(.caption.bold())
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -3352,6 +3552,46 @@ public struct OriginalFiveTabSettingsView: View {
                         Button("Unlock Vault with Key…") {
                             model.showUnlockSheet = true
                         }
+                        .controlSize(.small)
+                    }
+                }
+                .padding(8)
+            }
+
+            // Syncophant-Style Local Network Contact Audit Map & Redacted Diagnostics Export
+            GroupBox("Every Place Helium Talks To (Local Privacy Audit Ledger)") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Zero analytics, zero telemetry, zero central tracking server. Every network destination is counted locally on this Mac.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Clear History") {
+                            model.clearNetworkContactHistory()
+                        }
+                        .controlSize(.small)
+                        .disabled(model.networkContacts.isEmpty)
+                    }
+
+                    HeliumNetworkContactMap(entries: model.networkContacts)
+
+                    Divider()
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Privacy-Redacted Diagnostics Log")
+                                .font(.caption.bold())
+                            Text("Saves a diagnostic log to Downloads with email addresses, tokens, and Mac usernames automatically stripped.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Save Redacted Log…") {
+                            if let url = model.exportRedactedDiagnosticsLog() {
+                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                     }
                 }
@@ -4358,10 +4598,19 @@ public struct MenuBarPopoverView: View {
 
                 // Helium-Style Quick Menu Rows (Search Helium ⌃⌥O, Open in Finder, Your Account ↗, Send Feedback, Settings ⌘,)
                 VStack(spacing: 2) {
-                    menuBarQuickActionRow(icon: "magnifyingglass", title: "Search Helium", trailingText: "⌃⌥O") {
+                    menuBarQuickActionRow(icon: "magnifyingglass", title: "Command Palette & Search", trailingText: "⌃⌥O") {
                         withAnimation(HeliumSpring.snappy) {
                             activePage = .search
                         }
+                    }
+                    menuBarQuickActionRow(icon: "waveform.path.ecg", title: "Activity & Safe-Write Health", trailingText: model.actionableIssues.isEmpty ? "✓" : "\(model.actionableIssues.count)") {
+                        model.navigateToMainWindow(destination: .activity)
+                    }
+                    menuBarQuickActionRow(icon: "clock.arrow.circlepath", title: "Scheduled Mac Backups", trailingText: "\(model.backupJobs.count)") {
+                        model.navigateToMainWindow(destination: .backups)
+                    }
+                    menuBarQuickActionRow(icon: "clock.arrow.2.circlepath", title: "Time Travel & Snapshots", trailingText: "\(model.poolSnapshots.count)") {
+                        model.navigateToMainWindow(destination: .timeTravel)
                     }
                     menuBarQuickActionRow(icon: "folder", title: "Open in Finder", trailingText: nil) {
                         model.openInFinder()
