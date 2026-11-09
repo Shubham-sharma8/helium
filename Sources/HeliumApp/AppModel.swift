@@ -409,8 +409,8 @@ public struct RealtimeChunkReadEvent: Identifiable, Equatable, Sendable {
 
 @MainActor
 public final class AppModel: ObservableObject {
-    public static let appVersion = "0.0.1"
-    public static let appBuild = "1"
+    public static let appVersion = "0.0.2"
+    public static let appBuild = "2"
     public static let supportEmail = "connect@cogify.me"
     // MARK: - Navigation & Lifecycle State
     @Published public var phase: AppPhase = .active

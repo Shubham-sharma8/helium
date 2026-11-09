@@ -114,9 +114,16 @@ EOF
 # Copy Firebase / Google Cloud credentials, Privacy Manifest, and Helium Visual Assets + Icons + Help Book
 if [[ -f "$WORKSPACE_DIR/GoogleService-Info.plist" ]]; then
     cp "$WORKSPACE_DIR/GoogleService-Info.plist" "$CONTENTS/Resources/GoogleService-Info.plist"
+elif [[ -f "$WORKSPACE_DIR/.local-credentials/GoogleService-Info.plist" ]]; then
+    cp "$WORKSPACE_DIR/.local-credentials/GoogleService-Info.plist" "$CONTENTS/Resources/GoogleService-Info.plist"
 fi
 if [[ -f "$WORKSPACE_DIR/google-services.json" ]]; then
     cp "$WORKSPACE_DIR/google-services.json" "$CONTENTS/Resources/google-services.json"
+elif [[ -f "$WORKSPACE_DIR/.local-credentials/google-services.json" ]]; then
+    cp "$WORKSPACE_DIR/.local-credentials/google-services.json" "$CONTENTS/Resources/google-services.json"
+fi
+if [[ -f "$CONTENTS/Resources/GoogleService-Info.plist" && -z "${HELIUM_REVERSED_CLIENT_ID:-}" ]]; then
+    HELIUM_REVERSED_CLIENT_ID="$(/usr/libexec/PlistBuddy -c 'Print :REVERSED_CLIENT_ID' "$CONTENTS/Resources/GoogleService-Info.plist" 2>/dev/null || true)"
 fi
 if [[ -f "$WORKSPACE_DIR/Resources/PrivacyInfo.xcprivacy" ]]; then
     cp "$WORKSPACE_DIR/Resources/PrivacyInfo.xcprivacy" "$CONTENTS/Resources/PrivacyInfo.xcprivacy"

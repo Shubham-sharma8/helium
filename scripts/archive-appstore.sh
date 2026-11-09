@@ -92,9 +92,16 @@ dsymutil "$ARCHIVE_CONTENTS/MacOS/Helium" -o "$ARCHIVE_DSYMS/${APP_NAME}.app.dSY
 # Copy Resources (Credentials, Privacy Manifest, Asset Catalog, Icons, Help Book)
 if [[ -f "$WORKSPACE_DIR/GoogleService-Info.plist" ]]; then
     cp "$WORKSPACE_DIR/GoogleService-Info.plist" "$ARCHIVE_CONTENTS/Resources/GoogleService-Info.plist"
+elif [[ -f "$WORKSPACE_DIR/.local-credentials/GoogleService-Info.plist" ]]; then
+    cp "$WORKSPACE_DIR/.local-credentials/GoogleService-Info.plist" "$ARCHIVE_CONTENTS/Resources/GoogleService-Info.plist"
 fi
 if [[ -f "$WORKSPACE_DIR/google-services.json" ]]; then
     cp "$WORKSPACE_DIR/google-services.json" "$ARCHIVE_CONTENTS/Resources/google-services.json"
+elif [[ -f "$WORKSPACE_DIR/.local-credentials/google-services.json" ]]; then
+    cp "$WORKSPACE_DIR/.local-credentials/google-services.json" "$ARCHIVE_CONTENTS/Resources/google-services.json"
+fi
+if [[ -f "$ARCHIVE_CONTENTS/Resources/GoogleService-Info.plist" && -z "${HELIUM_REVERSED_CLIENT_ID:-}" ]]; then
+    HELIUM_REVERSED_CLIENT_ID="$(/usr/libexec/PlistBuddy -c 'Print :REVERSED_CLIENT_ID' "$ARCHIVE_CONTENTS/Resources/GoogleService-Info.plist" 2>/dev/null || true)"
 fi
 if [[ -f "$WORKSPACE_DIR/Resources/PrivacyInfo.xcprivacy" ]]; then
     cp "$WORKSPACE_DIR/Resources/PrivacyInfo.xcprivacy" "$ARCHIVE_CONTENTS/Resources/PrivacyInfo.xcprivacy"
