@@ -1,0 +1,488 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000010000000000000001 /* Sources/OrbitCore/Concurrency/AsyncPrimitives.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000001 /* Sources/OrbitCore/Concurrency/AsyncPrimitives.swift */; };
+		A10000020000000000000001 /* Sources/OrbitCore/Container/SharedContainerAndMount.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000020000000000000001 /* Sources/OrbitCore/Container/SharedContainerAndMount.swift */; };
+		A10000030000000000000001 /* Sources/OrbitCore/Crypto/LockedRemoteAndKeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000030000000000000001 /* Sources/OrbitCore/Crypto/LockedRemoteAndKeyManager.swift */; };
+		A10000040000000000000001 /* Sources/OrbitCore/Crypto/ZK.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000040000000000000001 /* Sources/OrbitCore/Crypto/ZK.swift */; };
+		A10000050000000000000001 /* Sources/OrbitCore/Drive/ChunkStoreAndReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000050000000000000001 /* Sources/OrbitCore/Drive/ChunkStoreAndReader.swift */; };
+		A10000060000000000000001 /* Sources/OrbitCore/Drive/DriveTreeAndStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000060000000000000001 /* Sources/OrbitCore/Drive/DriveTreeAndStorage.swift */; };
+		A10000070000000000000001 /* Sources/OrbitCore/Drive/OrbitDriveAndPacing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000070000000000000001 /* Sources/OrbitCore/Drive/OrbitDriveAndPacing.swift */; };
+		A10000080000000000000001 /* Sources/OrbitCore/Remote/DriveRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000080000000000000001 /* Sources/OrbitCore/Remote/DriveRemote.swift */; };
+		A10000090000000000000001 /* Sources/OrbitCore/Remote/RemoteModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000090000000000000001 /* Sources/OrbitCore/Remote/RemoteModels.swift */; };
+		A100000A0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/FirebaseConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000A0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/FirebaseConfig.swift */; };
+		A100000B0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/PooledGoogleDriveRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000B0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/PooledGoogleDriveRemote.swift */; };
+		A100000C0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/StoragePoolAllocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000C0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/StoragePoolAllocator.swift */; };
+		A10000110000000000000001 /* Sources/HeliumApp/AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000110000000000000001 /* Sources/HeliumApp/AppModel.swift */; };
+		A10000120000000000000001 /* Sources/HeliumApp/GoogleOAuthCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000120000000000000001 /* Sources/HeliumApp/GoogleOAuthCoordinator.swift */; };
+		A10000130000000000000001 /* Sources/HeliumApp/HeliumHelpAndPopovers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000130000000000000001 /* Sources/HeliumApp/HeliumHelpAndPopovers.swift */; };
+		A10000140000000000000001 /* Sources/HeliumApp/HeliumTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000140000000000000001 /* Sources/HeliumApp/HeliumTheme.swift */; };
+		A10000150000000000000001 /* Sources/HeliumApp/HeliumViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000150000000000000001 /* Sources/HeliumApp/HeliumViews.swift */; };
+		A10000160000000000000001 /* Sources/HeliumApp/OrbitApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000160000000000000001 /* Sources/HeliumApp/OrbitApp.swift */; };
+		A10000170000000000000001 /* Sources/HeliumApp/HeliumRealtimeVFSServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000170000000000000001 /* Sources/HeliumApp/HeliumRealtimeVFSServer.swift */; };
+		A10000210000000000000001 /* Resources/Orbit.icns in Resources */ = {isa = PBXBuildFile; fileRef = A20000210000000000000001 /* Resources/Orbit.icns */; };
+		A10000220000000000000001 /* Resources/Helium.icns in Resources */ = {isa = PBXBuildFile; fileRef = A20000220000000000000001 /* Resources/Helium.icns */; };
+		A10000230000000000000001 /* Resources/AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = A20000230000000000000001 /* Resources/AppIcon.icns */; };
+		A10000240000000000000001 /* Resources/HeliumIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = A20000240000000000000001 /* Resources/HeliumIcon.png */; };
+		A10000250000000000000001 /* Resources/HeliumMascot.png in Resources */ = {isa = PBXBuildFile; fileRef = A20000250000000000000001 /* Resources/HeliumMascot.png */; };
+		A10000260000000000000001 /* Resources/MenuBarSmile.png in Resources */ = {isa = PBXBuildFile; fileRef = A20000260000000000000001 /* Resources/MenuBarSmile.png */; };
+		A10000270000000000000001 /* Resources/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000270000000000000001 /* Resources/Assets.xcassets */; };
+		A10000280000000000000001 /* Resources/PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A20000280000000000000001 /* Resources/PrivacyInfo.xcprivacy */; };
+		A10000290000000000000001 /* Resources/Helium.help in Resources */ = {isa = PBXBuildFile; fileRef = A20000290000000000000001 /* Resources/Helium.help */; };
+		A100002A0000000000000001 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A200002A0000000000000001 /* GoogleService-Info.plist */; };
+		A100002B0000000000000001 /* google-services.json in Resources */ = {isa = PBXBuildFile; fileRef = A200002B0000000000000001 /* google-services.json */; };
+		A10000310000000000000001 /* libOrbitCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A30000010000000000000001 /* libOrbitCore.a */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A40000010000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A90000010000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A60000010000000000000001;
+			remoteInfo = OrbitCore;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A20000010000000000000001 /* Sources/OrbitCore/Concurrency/AsyncPrimitives.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Concurrency/AsyncPrimitives.swift; sourceTree = "<group>"; };
+		A20000020000000000000001 /* Sources/OrbitCore/Container/SharedContainerAndMount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Container/SharedContainerAndMount.swift; sourceTree = "<group>"; };
+		A20000030000000000000001 /* Sources/OrbitCore/Crypto/LockedRemoteAndKeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Crypto/LockedRemoteAndKeyManager.swift; sourceTree = "<group>"; };
+		A20000040000000000000001 /* Sources/OrbitCore/Crypto/ZK.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Crypto/ZK.swift; sourceTree = "<group>"; };
+		A20000050000000000000001 /* Sources/OrbitCore/Drive/ChunkStoreAndReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Drive/ChunkStoreAndReader.swift; sourceTree = "<group>"; };
+		A20000060000000000000001 /* Sources/OrbitCore/Drive/DriveTreeAndStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Drive/DriveTreeAndStorage.swift; sourceTree = "<group>"; };
+		A20000070000000000000001 /* Sources/OrbitCore/Drive/OrbitDriveAndPacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Drive/OrbitDriveAndPacing.swift; sourceTree = "<group>"; };
+		A20000080000000000000001 /* Sources/OrbitCore/Remote/DriveRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Remote/DriveRemote.swift; sourceTree = "<group>"; };
+		A20000090000000000000001 /* Sources/OrbitCore/Remote/RemoteModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Remote/RemoteModels.swift; sourceTree = "<group>"; };
+		A200000A0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/FirebaseConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Remote/GoogleDrivePool/FirebaseConfig.swift; sourceTree = "<group>"; };
+		A200000B0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/PooledGoogleDriveRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Remote/GoogleDrivePool/PooledGoogleDriveRemote.swift; sourceTree = "<group>"; };
+		A200000C0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/StoragePoolAllocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OrbitCore/Remote/GoogleDrivePool/StoragePoolAllocator.swift; sourceTree = "<group>"; };
+		A20000110000000000000001 /* Sources/HeliumApp/AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/HeliumApp/AppModel.swift; sourceTree = "<group>"; };
+		A20000120000000000000001 /* Sources/HeliumApp/GoogleOAuthCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/HeliumApp/GoogleOAuthCoordinator.swift; sourceTree = "<group>"; };
+		A20000130000000000000001 /* Sources/HeliumApp/HeliumHelpAndPopovers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/HeliumApp/HeliumHelpAndPopovers.swift; sourceTree = "<group>"; };
+		A20000140000000000000001 /* Sources/HeliumApp/HeliumTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/HeliumApp/HeliumTheme.swift; sourceTree = "<group>"; };
+		A20000150000000000000001 /* Sources/HeliumApp/HeliumViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/HeliumApp/HeliumViews.swift; sourceTree = "<group>"; };
+		A20000160000000000000001 /* Sources/HeliumApp/OrbitApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/HeliumApp/OrbitApp.swift; sourceTree = "<group>"; };
+		A20000170000000000000001 /* Sources/HeliumApp/HeliumRealtimeVFSServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/HeliumApp/HeliumRealtimeVFSServer.swift; sourceTree = "<group>"; };
+		A20000210000000000000001 /* Resources/Orbit.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Resources/Orbit.icns; sourceTree = "<group>"; };
+		A20000220000000000000001 /* Resources/Helium.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Resources/Helium.icns; sourceTree = "<group>"; };
+		A20000230000000000000001 /* Resources/AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Resources/AppIcon.icns; sourceTree = "<group>"; };
+		A20000240000000000000001 /* Resources/HeliumIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Resources/HeliumIcon.png; sourceTree = "<group>"; };
+		A20000250000000000000001 /* Resources/HeliumMascot.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Resources/HeliumMascot.png; sourceTree = "<group>"; };
+		A20000260000000000000001 /* Resources/MenuBarSmile.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Resources/MenuBarSmile.png; sourceTree = "<group>"; };
+		A20000270000000000000001 /* Resources/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
+		A20000280000000000000001 /* Resources/PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A20000290000000000000001 /* Resources/Helium.help */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Resources/Helium.help; sourceTree = "<group>"; };
+		A200002A0000000000000001 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+		A200002B0000000000000001 /* google-services.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "google-services.json"; sourceTree = "<group>"; };
+		A200002C0000000000000001 /* Config/Helium-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Config/Helium-Info.plist"; sourceTree = "<group>"; };
+		A200002D0000000000000001 /* Config/Helium-Direct.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Config/Helium-Direct.entitlements"; sourceTree = "<group>"; };
+		A200002E0000000000000001 /* Config/Helium-AppStore.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Config/Helium-AppStore.entitlements"; sourceTree = "<group>"; };
+		A200002F0000000000000001 /* Config/ExportOptions-DirectDistribution.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Config/ExportOptions-DirectDistribution.plist"; sourceTree = "<group>"; };
+		A20000300000000000000001 /* Config/ExportOptions-AppStore.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Config/ExportOptions-AppStore.plist"; sourceTree = "<group>"; };
+		A30000010000000000000001 /* libOrbitCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libOrbitCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		A30000020000000000000001 /* Helium.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Helium.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A50000010000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A50000020000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000310000000000000001 /* libOrbitCore.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A70000010000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A70000020000000000000001 /* OrbitCore */,
+				A70000030000000000000001 /* HeliumApp */,
+				A70000040000000000000001 /* Resources */,
+				A70000050000000000000001 /* Config */,
+				A70000060000000000000001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A70000020000000000000001 /* OrbitCore */ = {
+			isa = PBXGroup;
+			children = (
+				A20000010000000000000001 /* Sources/OrbitCore/Concurrency/AsyncPrimitives.swift */,
+				A20000020000000000000001 /* Sources/OrbitCore/Container/SharedContainerAndMount.swift */,
+				A20000030000000000000001 /* Sources/OrbitCore/Crypto/LockedRemoteAndKeyManager.swift */,
+				A20000040000000000000001 /* Sources/OrbitCore/Crypto/ZK.swift */,
+				A20000050000000000000001 /* Sources/OrbitCore/Drive/ChunkStoreAndReader.swift */,
+				A20000060000000000000001 /* Sources/OrbitCore/Drive/DriveTreeAndStorage.swift */,
+				A20000070000000000000001 /* Sources/OrbitCore/Drive/OrbitDriveAndPacing.swift */,
+				A20000080000000000000001 /* Sources/OrbitCore/Remote/DriveRemote.swift */,
+				A20000090000000000000001 /* Sources/OrbitCore/Remote/RemoteModels.swift */,
+				A200000A0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/FirebaseConfig.swift */,
+				A200000B0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/PooledGoogleDriveRemote.swift */,
+				A200000C0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/StoragePoolAllocator.swift */,
+			);
+			name = OrbitCore;
+			sourceTree = "<group>";
+		};
+		A70000030000000000000001 /* HeliumApp */ = {
+			isa = PBXGroup;
+			children = (
+				A20000110000000000000001 /* Sources/HeliumApp/AppModel.swift */,
+				A20000120000000000000001 /* Sources/HeliumApp/GoogleOAuthCoordinator.swift */,
+				A20000130000000000000001 /* Sources/HeliumApp/HeliumHelpAndPopovers.swift */,
+				A20000140000000000000001 /* Sources/HeliumApp/HeliumTheme.swift */,
+				A20000150000000000000001 /* Sources/HeliumApp/HeliumViews.swift */,
+				A20000160000000000000001 /* Sources/HeliumApp/OrbitApp.swift */,
+				A20000170000000000000001 /* Sources/HeliumApp/HeliumRealtimeVFSServer.swift */,
+			);
+			name = HeliumApp;
+			sourceTree = "<group>";
+		};
+		A70000040000000000000001 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A20000210000000000000001 /* Resources/Orbit.icns */,
+				A20000220000000000000001 /* Resources/Helium.icns */,
+				A20000230000000000000001 /* Resources/AppIcon.icns */,
+				A20000240000000000000001 /* Resources/HeliumIcon.png */,
+				A20000250000000000000001 /* Resources/HeliumMascot.png */,
+				A20000260000000000000001 /* Resources/MenuBarSmile.png */,
+				A20000270000000000000001 /* Resources/Assets.xcassets */,
+				A20000280000000000000001 /* Resources/PrivacyInfo.xcprivacy */,
+				A20000290000000000000001 /* Resources/Helium.help */,
+				A200002A0000000000000001 /* GoogleService-Info.plist */,
+				A200002B0000000000000001 /* google-services.json */,
+			);
+			name = Resources;
+			sourceTree = "<group>";
+		};
+		A70000050000000000000001 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				A200002C0000000000000001 /* Config/Helium-Info.plist */,
+				A200002D0000000000000001 /* Config/Helium-Direct.entitlements */,
+				A200002E0000000000000001 /* Config/Helium-AppStore.entitlements */,
+				A200002F0000000000000001 /* Config/ExportOptions-DirectDistribution.plist */,
+				A20000300000000000000001 /* Config/ExportOptions-AppStore.plist */,
+			);
+			name = Config;
+			sourceTree = "<group>";
+		};
+		A70000060000000000000001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A30000020000000000000001 /* Helium.app */,
+				A30000010000000000000001 /* libOrbitCore.a */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A60000010000000000000001 /* OrbitCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000020000000000000001 /* Build configuration list for PBXNativeTarget "OrbitCore" */;
+			buildPhases = (
+				A50000110000000000000001 /* Sources */,
+				A50000010000000000000001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OrbitCore;
+			productName = OrbitCore;
+			productReference = A30000010000000000000001 /* libOrbitCore.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+		A60000020000000000000001 /* Helium */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000030000000000000001 /* Build configuration list for PBXNativeTarget "Helium" */;
+			buildPhases = (
+				A50000120000000000000001 /* Sources */,
+				A50000020000000000000001 /* Frameworks */,
+				A50000210000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A40000020000000000000001 /* PBXTargetDependency */,
+			);
+			name = Helium;
+			productName = Helium;
+			productReference = A30000020000000000000001 /* Helium.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A90000010000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					A60000010000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					A60000020000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = A80000010000000000000001 /* Build configuration list for PBXProject "Helium" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A70000010000000000000001;
+			productRefGroup = A70000060000000000000001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A60000020000000000000001 /* Helium */,
+				A60000010000000000000001 /* OrbitCore */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A50000210000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000210000000000000001 /* Resources/Orbit.icns in Resources */,
+				A10000220000000000000001 /* Resources/Helium.icns in Resources */,
+				A10000240000000000000001 /* Resources/HeliumIcon.png in Resources */,
+				A10000250000000000000001 /* Resources/HeliumMascot.png in Resources */,
+				A10000260000000000000001 /* Resources/MenuBarSmile.png in Resources */,
+				A10000270000000000000001 /* Resources/Assets.xcassets in Resources */,
+				A10000280000000000000001 /* Resources/PrivacyInfo.xcprivacy in Resources */,
+				A10000290000000000000001 /* Resources/Helium.help in Resources */,
+				A100002A0000000000000001 /* GoogleService-Info.plist in Resources */,
+				A100002B0000000000000001 /* google-services.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A50000110000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000001 /* Sources/OrbitCore/Concurrency/AsyncPrimitives.swift in Sources */,
+				A10000020000000000000001 /* Sources/OrbitCore/Container/SharedContainerAndMount.swift in Sources */,
+				A10000030000000000000001 /* Sources/OrbitCore/Crypto/LockedRemoteAndKeyManager.swift in Sources */,
+				A10000040000000000000001 /* Sources/OrbitCore/Crypto/ZK.swift in Sources */,
+				A10000050000000000000001 /* Sources/OrbitCore/Drive/ChunkStoreAndReader.swift in Sources */,
+				A10000060000000000000001 /* Sources/OrbitCore/Drive/DriveTreeAndStorage.swift in Sources */,
+				A10000070000000000000001 /* Sources/OrbitCore/Drive/OrbitDriveAndPacing.swift in Sources */,
+				A10000080000000000000001 /* Sources/OrbitCore/Remote/DriveRemote.swift in Sources */,
+				A10000090000000000000001 /* Sources/OrbitCore/Remote/RemoteModels.swift in Sources */,
+				A100000A0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/FirebaseConfig.swift in Sources */,
+				A100000B0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/PooledGoogleDriveRemote.swift in Sources */,
+				A100000C0000000000000001 /* Sources/OrbitCore/Remote/GoogleDrivePool/StoragePoolAllocator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A50000120000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000110000000000000001 /* Sources/HeliumApp/AppModel.swift in Sources */,
+				A10000120000000000000001 /* Sources/HeliumApp/GoogleOAuthCoordinator.swift in Sources */,
+				A10000130000000000000001 /* Sources/HeliumApp/HeliumHelpAndPopovers.swift in Sources */,
+				A10000140000000000000001 /* Sources/HeliumApp/HeliumTheme.swift in Sources */,
+				A10000150000000000000001 /* Sources/HeliumApp/HeliumViews.swift in Sources */,
+				A10000160000000000000001 /* Sources/HeliumApp/OrbitApp.swift in Sources */,
+				A10000170000000000000001 /* Sources/HeliumApp/HeliumRealtimeVFSServer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A40000020000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A60000010000000000000001 /* OrbitCore */;
+			targetProxy = A40000010000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000010000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 15.4;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AA0000020000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.4;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		AA0000030000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEFINES_MODULE = YES;
+				EXECUTABLE_PREFIX = lib;
+				PRODUCT_MODULE_NAME = OrbitCore;
+				PRODUCT_NAME = OrbitCore;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AA0000040000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEFINES_MODULE = YES;
+				EXECUTABLE_PREFIX = lib;
+				PRODUCT_MODULE_NAME = OrbitCore;
+				PRODUCT_NAME = OrbitCore;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		AA0000050000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "Config/Helium-Direct.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/Helium-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Helium;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INSTALL_PATH = "$(LOCAL_APPS_DIR)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.helium.app;
+				PRODUCT_MODULE_NAME = HeliumApp;
+				PRODUCT_NAME = Helium;
+				SKIP_INSTALL = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AA0000060000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "Config/Helium-Direct.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/Helium-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Helium;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INSTALL_PATH = "$(LOCAL_APPS_DIR)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.helium.app;
+				PRODUCT_MODULE_NAME = HeliumApp;
+				PRODUCT_NAME = Helium;
+				SKIP_INSTALL = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A80000010000000000000001 /* Build configuration list for PBXProject "Helium" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000010000000000000001 /* Debug */,
+				AA0000020000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000020000000000000001 /* Build configuration list for PBXNativeTarget "OrbitCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000030000000000000001 /* Debug */,
+				AA0000040000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000030000000000000001 /* Build configuration list for PBXNativeTarget "Helium" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000050000000000000001 /* Debug */,
+				AA0000060000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A90000010000000000000001 /* Project object */;
+}

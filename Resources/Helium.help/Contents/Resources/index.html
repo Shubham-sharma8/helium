@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="AppleTitle" content="Helium Help" />
+    <title>Helium Help — Multi-Account Google Drive Pool for macOS</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #f6f8fb;
+            --card: #ffffff;
+            --text: #111827;
+            --muted: #4b5563;
+            --accent: #2563eb;
+            --border: rgba(0, 0, 0, 0.08);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #111318;
+                --card: #1b1f27;
+                --text: #f3f4f6;
+                --muted: #9ca3af;
+                --accent: #60a5fa;
+                --border: rgba(255, 255, 255, 0.1);
+            }
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 32px 24px 48px;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.55;
+        }
+        .container {
+            max-width: 780px;
+            margin: 0 auto;
+        }
+        header {
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        h1 {
+            margin: 0 0 6px;
+            font-size: 26px;
+            letter-spacing: -0.02em;
+        }
+        h2 {
+            margin: 0 0 10px;
+            font-size: 18px;
+        }
+        .subtitle {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-bottom: 16px;
+        }
+        .badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: rgba(37, 99, 235, 0.15);
+            color: var(--accent);
+            margin-bottom: 6px;
+        }
+        ul {
+            margin: 8px 0 0;
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 8px;
+        }
+        a {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        footer {
+            margin-top: 28px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            font-size: 13px;
+            color: var(--muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Helium Help Center</h1>
+            <p class="subtitle">Combine multiple Google Drive accounts into a single fast macOS virtual disk at <code>/Volumes/Helium</code>.</p>
+        </header>
+
+        <section class="card">
+            <span class="badge">Placement Engine</span>
+            <h2>Storage Pool Placement Engine: Both vs Mode 1 vs Mode 2</h2>
+            <ul>
+                <li><strong>Both (Smart Whole-File + Auto Striping) — Recommended:</strong> Keeps everyday files (&lt; threshold or fitting on one drive) as a single intact file in Google Drive so you can preview and open them directly on <code>drive.google.com</code>, and automatically switches to cross-account segment striping when a file is larger than any single account's free space.</li>
+                <li><strong>Mode 1: Whole-File Smart Placement:</strong> Always keeps every file as 1 complete, unsplit file on your highest-priority Google Drive account that has enough free space. Best when you want 100% of files directly playable and downloadable from Google Drive web without Helium.</li>
+                <li><strong>Mode 2: Always Cross-Account Striping:</strong> Splits every uploaded file into chunked segments (64 MiB–256 MiB) distributed across all linked Google Drives in parallel. Maximizes combined bandwidth and pools small fragments of free space across accounts.</li>
+            </ul>
+        </section>
+
+        <section class="card">
+            <span class="badge">Upload Routing</span>
+            <h2>Google Account Upload Priority (#1 → #2 → #3)</h2>
+            <ul>
+                <li><strong>Priority Order (#1 → #2 → #3…):</strong> Uploads go to your <code>#1</code> Google Drive first until it fills up, then automatically overflow to <code>#2</code>, <code>#3</code>, and beyond. Reorder accounts anytime in the Google Drive Pool tab.</li>
+                <li><strong>Most Free Space:</strong> Automatically selects whichever linked Google Drive currently has the most free gigabytes.</li>
+                <li><strong>Preferred Target Account:</strong> Pins a specific Google Drive for your next uploads, with automatic overflow if full.</li>
+                <li><strong>Moving Existing Files:</strong> Right-click any file in Helium Home (or open its Inspector) and choose <em>Move to Google Account</em> to migrate it to another linked Google Drive.</li>
+            </ul>
+        </section>
+
+        <section class="card">
+            <span class="badge">Finder &amp; Privacy</span>
+            <h2>Finder Virtual Disk (<code>/Volumes/Helium</code>) &amp; Zero-Knowledge Encryption</h2>
+            <ul>
+                <li><strong>Zero Local Disk Space:</strong> Files in <code>/Volumes/Helium</code> stream on demand and take 0 bytes on your Mac until opened. Click the Pin button on any file to keep it available offline.</li>
+                <li><strong>Zero-Knowledge Encryption:</strong> Enable AES-256-GCM encryption in Settings → Privacy to encrypt file contents and filenames before they leave your Mac. Save your 52-character Recovery Key in Apple Passwords.</li>
+            </ul>
+        </section>
+
+        <section class="card">
+            <span class="badge">Support &amp; Contact</span>
+            <h2>Contact &amp; Email Support (<code>connect@cogify.me</code>)</h2>
+            <ul>
+                <li><strong>Email Engineering &amp; Support:</strong> Need help with Google Drive pooling, OAuth setup, enterprise licensing, or feature requests? Write directly to <a href="mailto:connect@cogify.me?subject=Helium%20v0.0.1%20Support%20%26%20Feedback">connect@cogify.me</a>.</li>
+                <li><strong>In-App Email Composer:</strong> Open <em>Help → Helium Help Center → Contact &amp; Email Support</em> or <em>Settings → Updates → Send Feedback</em> inside Helium v0.0.1 to generate a pre-filled support email with one click.</li>
+            </ul>
+        </section>
+
+        <footer>
+            Helium v0.0.1 (Build 1) • Made with ❤️ by <a href="https://cogify.me" target="_blank" rel="noopener noreferrer">cogify.me</a> • <a href="mailto:connect@cogify.me">connect@cogify.me</a>
+        </footer>
+    </div>
+</body>
+</html>
