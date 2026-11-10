@@ -4,8 +4,10 @@ set -euo pipefail
 WORKSPACE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
-APP_VERSION="0.0.1"
-APP_BUILD="1"
+APP_VERSION="0.0.2"
+APP_BUILD="2"
+DETECTED_IDENTITY="$(security find-identity -v -p codesigning | grep -E 'Developer ID Application|Apple Development|Apple Distribution' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+SIGN_IDENTITY="${APPLE_SIGN_IDENTITY:-${DETECTED_IDENTITY:--}}"
 
 echo "==> Building all Helium v${APP_VERSION} (Build ${APP_BUILD}) targets (HeliumApp, OrbitFS, OrbitFinder, OrbitMountHelper)..."
 cd "$WORKSPACE_DIR"
@@ -122,8 +124,14 @@ if [[ -f "$WORKSPACE_DIR/google-services.json" ]]; then
 elif [[ -f "$WORKSPACE_DIR/.local-credentials/google-services.json" ]]; then
     cp "$WORKSPACE_DIR/.local-credentials/google-services.json" "$CONTENTS/Resources/google-services.json"
 fi
-if [[ -f "$CONTENTS/Resources/GoogleService-Info.plist" && -z "${HELIUM_REVERSED_CLIENT_ID:-}" ]]; then
-    HELIUM_REVERSED_CLIENT_ID="$(/usr/libexec/PlistBuddy -c 'Print :REVERSED_CLIENT_ID' "$CONTENTS/Resources/GoogleService-Info.plist" 2>/dev/null || true)"
+if [[ -f "$CONTENTS/Resources/GoogleService-Info.plist" ]]; then
+    cp "$CONTENTS/Resources/GoogleService-Info.plist" "$HELIUM_SUPPORT_DIR/GoogleService-Info.plist" 2>/dev/null || true
+    if [[ -z "${HELIUM_REVERSED_CLIENT_ID:-}" ]]; then
+        HELIUM_REVERSED_CLIENT_ID="$(/usr/libexec/PlistBuddy -c 'Print :REVERSED_CLIENT_ID' "$CONTENTS/Resources/GoogleService-Info.plist" 2>/dev/null || true)"
+    fi
+fi
+if [[ -f "$CONTENTS/Resources/google-services.json" ]]; then
+    cp "$CONTENTS/Resources/google-services.json" "$HELIUM_SUPPORT_DIR/google-services.json" 2>/dev/null || true
 fi
 if [[ -f "$WORKSPACE_DIR/Resources/PrivacyInfo.xcprivacy" ]]; then
     cp "$WORKSPACE_DIR/Resources/PrivacyInfo.xcprivacy" "$CONTENTS/Resources/PrivacyInfo.xcprivacy"
@@ -226,9 +234,9 @@ cat > "$CONTENTS/Library/LaunchDaemons/com.cogify.helium.MountHelper.plist" <<'E
 EOF
 
 if [[ -f "$WORKSPACE_DIR/Config/Helium-Direct.entitlements" ]]; then
-    codesign --force --deep --entitlements "$WORKSPACE_DIR/Config/Helium-Direct.entitlements" --sign - "$APP_BUNDLE" >/dev/null 2>&1 || true
+    codesign --force --deep --entitlements "$WORKSPACE_DIR/Config/Helium-Direct.entitlements" --sign "$SIGN_IDENTITY" "$APP_BUNDLE" >/dev/null 2>&1 || true
 else
-    codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null 2>&1 || true
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_BUNDLE" >/dev/null 2>&1 || true
 fi
 
 rm -rf "/Applications/Helium.app" "/Applications/Helium.app" 2>/dev/null || true

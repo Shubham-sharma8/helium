@@ -112,6 +112,12 @@ public struct FirebaseConfig: Codable, Equatable, Sendable {
                 return loaded
             }
         }
+        let containerDir = SharedContainer.directoryURL()
+        let containerPlist = containerDir.appendingPathComponent("GoogleService-Info.plist")
+        let containerJson = containerDir.appendingPathComponent("google-services.json")
+        if let loaded = try? load(plistURL: containerPlist, jsonURL: containerJson) {
+            return loaded
+        }
         if let root = workspaceFallback {
             for relativePlist in ["GoogleService-Info.plist", ".local-credentials/GoogleService-Info.plist"] {
                 let plistURL = root.appendingPathComponent(relativePlist)

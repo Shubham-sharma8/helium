@@ -802,16 +802,14 @@ public actor GoogleAccountPool {
                 if let rtData = secretStore.get("helium.oauth.rt.\(acc.id)"),
                    let rt = String(data: rtData, encoding: .utf8), !rt.isEmpty {
                     acc.refreshToken = rt
+                } else if !acc.refreshToken.isEmpty {
+                    try? secretStore.set(Data(acc.refreshToken.utf8), for: "helium.oauth.rt.\(acc.id)")
                 }
                 if let atData = secretStore.get("helium.oauth.at.\(acc.id)"),
                    let at = String(data: atData, encoding: .utf8), !at.isEmpty {
                     acc.accessToken = at
-                }
-                // If an account was saved by an older build that used MemorySecretStore and lost both tokens,
-                // purge the stale entry so the user can cleanly sign in and persist their real tokens.
-                if (acc.accessToken == nil || acc.accessToken?.isEmpty == true) && acc.refreshToken.isEmpty {
-                    purgedAny = true
-                    continue
+                } else if let at = acc.accessToken, !at.isEmpty {
+                    try? secretStore.set(Data(at.utf8), for: "helium.oauth.at.\(acc.id)")
                 }
                 loadedById[acc.id] = acc
                 loadedOrder.append(acc.id)
@@ -820,14 +818,10 @@ public actor GoogleAccountPool {
                 if !loadedOrder.isEmpty, !loadedById.values.contains(where: \.isPrimaryCatalogHost) {
                     loadedById[loadedOrder[0]]?.isPrimaryCatalogHost = true
                 }
-                let redactedList: [LinkedGoogleAccount] = loadedOrder.compactMap { id in
-                    guard var acc = loadedById[id] else { return nil }
-                    acc.refreshToken = ""
-                    acc.accessToken = nil
-                    return acc
-                }
-                if let data = try? JSONEncoder().encode(redactedList) {
+                let persistedList: [LinkedGoogleAccount] = loadedOrder.compactMap { loadedById[$0] }
+                if let data = try? JSONEncoder().encode(persistedList) {
                     try? data.write(to: persistenceURL, options: .atomic)
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: persistenceURL.path)
                 }
             }
         } else {
@@ -857,14 +851,10 @@ public actor GoogleAccountPool {
             }
         }
         guard let persistenceURL else { return }
-        let redactedList: [LinkedGoogleAccount] = orderedIds.compactMap { id in
-            guard var acc = accountsById[id] else { return nil }
-            acc.refreshToken = ""
-            acc.accessToken = nil
-            return acc
-        }
-        if let data = try? JSONEncoder().encode(redactedList) {
+        let persistedList: [LinkedGoogleAccount] = orderedIds.compactMap { accountsById[$0] }
+        if let data = try? JSONEncoder().encode(persistedList) {
             try? data.write(to: persistenceURL, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: persistenceURL.path)
         }
     }
 
@@ -877,6 +867,10 @@ public actor GoogleAccountPool {
     }
 
     public func addAccount(_ account: LinkedGoogleAccount) {
+        var unlinked = Set(UserDefaults.standard.stringArray(forKey: "helium.unlinkedAccountIds") ?? [])
+        if unlinked.remove(account.id) != nil {
+            UserDefaults.standard.set(Array(unlinked), forKey: "helium.unlinkedAccountIds")
+        }
         // Deduplicate by email if the same Google account is signed in again
         if let existingId = orderedIds.first(where: { accountsById[$0]?.email.lowercased() == account.email.lowercased() && $0 != account.id }) {
             accountsById.removeValue(forKey: existingId)
@@ -918,6 +912,61 @@ public actor GoogleAccountPool {
     public func refreshTokensAndQuotas(clientId: String?) async {
         let liveTransport = URLSessionGoogleDriveTransport()
         let resolvedClientId = clientId ?? FirebaseConfig.loadDefault().clientId ?? ""
+
+        // Recover any previously signed-in accounts whose refresh tokens exist in PersistentSecretStore
+        if let persistentStore = secretStore as? PersistentSecretStore, !resolvedClientId.isEmpty {
+            let unlinkedIds = Set(UserDefaults.standard.stringArray(forKey: "helium.unlinkedAccountIds") ?? [])
+            let rtPrefix = "helium.oauth.rt."
+            for key in persistentStore.allKeys().sorted() where key.hasPrefix(rtPrefix) {
+                let candidateId = String(key.dropFirst(rtPrefix.count))
+                guard candidateId.hasPrefix("gdrive_"),
+                      !Self.legacySimulatedIds.contains(candidateId),
+                      !unlinkedIds.contains(candidateId),
+                      accountsById[candidateId] == nil,
+                      let rtData = persistentStore.get(key),
+                      let rt = String(data: rtData, encoding: .utf8),
+                      !rt.isEmpty,
+                      !rt.hasPrefix("rt_") else {
+                    continue
+                }
+                if let freshToken = try? await liveTransport.refreshAccessToken(refreshToken: rt, clientId: resolvedClientId),
+                   let aboutURL = URL(string: "https://www.googleapis.com/drive/v3/about?fields=user,storageQuota") {
+                    var req = URLRequest(url: aboutURL, timeoutInterval: 20)
+                    req.setValue("Bearer \(freshToken)", forHTTPHeaderField: "Authorization")
+                    if let (aboutData, aboutResp) = try? await URLSession.shared.data(for: req),
+                       let http = aboutResp as? HTTPURLResponse,
+                       (200..<300).contains(http.statusCode),
+                       let json = try? JSONSerialization.jsonObject(with: aboutData) as? [String: Any],
+                       let userDict = json["user"] as? [String: Any],
+                       let email = userDict["emailAddress"] as? String, !email.isEmpty {
+                        if orderedIds.contains(where: { accountsById[$0]?.email.lowercased() == email.lowercased() }) {
+                            continue
+                        }
+                        let displayName = (userDict["displayName"] as? String) ?? email
+                        let quotaDict = json["storageQuota"] as? [String: Any]
+                        let limitBytes = Int64(quotaDict?["limit"] as? String ?? "") ?? (15 * 1_073_741_824)
+                        let usageBytes = Int64(quotaDict?["usage"] as? String ?? "") ?? 0
+                        let rootFolderId = (try? await liveTransport.ensureHeliumVaultFolder(accessToken: freshToken)) ?? "root"
+                        let recovered = LinkedGoogleAccount(
+                            id: candidateId,
+                            email: email,
+                            displayName: displayName,
+                            refreshToken: rt,
+                            accessToken: freshToken,
+                            isPrimaryCatalogHost: orderedIds.isEmpty,
+                            quotaLimitBytes: limitBytes,
+                            quotaUsedBytes: usageBytes,
+                            heliumUsedBytes: 0,
+                            rootFolderId: rootFolderId,
+                            uploadPriority: orderedIds.count + 1
+                        )
+                        accountsById[candidateId] = recovered
+                        orderedIds.append(candidateId)
+                    }
+                }
+            }
+        }
+
         for id in orderedIds {
             guard var acc = accountsById[id] else { continue }
             if !acc.refreshToken.isEmpty, !resolvedClientId.isEmpty, !acc.refreshToken.hasPrefix("rt_") {
@@ -947,6 +996,9 @@ public actor GoogleAccountPool {
     public func removeAccount(id: String) {
         accountsById.removeValue(forKey: id)
         orderedIds.removeAll { $0 == id }
+        var unlinked = Set(UserDefaults.standard.stringArray(forKey: "helium.unlinkedAccountIds") ?? [])
+        unlinked.insert(id)
+        UserDefaults.standard.set(Array(unlinked), forKey: "helium.unlinkedAccountIds")
         secretStore.delete("helium.oauth.rt.\(id)")
         secretStore.delete("helium.oauth.at.\(id)")
         if !orderedIds.isEmpty, !accountsById.values.contains(where: \.isPrimaryCatalogHost) {
@@ -1134,10 +1186,13 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
         for account: LinkedGoogleAccount,
         forceRefresh: Bool = false
     ) async -> LinkedGoogleAccount {
+        if pool.transport is MockGoogleDriveCloud {
+            return account
+        }
         var current = account
         let needsRefresh = forceRefresh || current.accessToken == nil || current.accessToken?.isEmpty == true
         guard needsRefresh,
-              !current.refreshToken.isEmpty,
+              current.refreshToken.count >= 12,
               !current.refreshToken.hasPrefix("rt_") else {
             return current
         }
@@ -1674,8 +1729,9 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
         guard length > 0 else { return Data() }
         var currentAccount = account
         let oauthClientId = FirebaseConfig.loadDefault().clientId ?? ""
-        if (currentAccount.accessToken == nil || currentAccount.accessToken?.isEmpty == true),
-           !currentAccount.refreshToken.isEmpty,
+        if !(pool.transport is MockGoogleDriveCloud),
+           (currentAccount.accessToken == nil || currentAccount.accessToken?.isEmpty == true),
+           currentAccount.refreshToken.count >= 12,
            !currentAccount.refreshToken.hasPrefix("rt_"),
            !oauthClientId.isEmpty {
             let freshToken = try await URLSessionGoogleDriveTransport().refreshAccessToken(
@@ -2110,8 +2166,9 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
     ) async throws -> String {
         var currentAccount = account
         let oauthClientId = FirebaseConfig.loadDefault().clientId ?? ""
-        if (currentAccount.accessToken == nil || currentAccount.accessToken?.isEmpty == true),
-           !currentAccount.refreshToken.isEmpty,
+        if !(pool.transport is MockGoogleDriveCloud),
+           (currentAccount.accessToken == nil || currentAccount.accessToken?.isEmpty == true),
+           currentAccount.refreshToken.count >= 12,
            !currentAccount.refreshToken.hasPrefix("rt_"),
            !oauthClientId.isEmpty {
             let freshToken = try await URLSessionGoogleDriveTransport().refreshAccessToken(

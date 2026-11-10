@@ -4585,23 +4585,17 @@ public struct MenuBarPopoverView: View {
                 OriginalHeliumHomeCard(
                     model: model,
                     onOpenSearch: {
-                        withAnimation(HeliumSpring.snappy) {
-                            activePage = .search
-                        }
+                        activePage = .search
                     },
                     onOpenSettings: {
-                        withAnimation(HeliumSpring.snappy) {
-                            activePage = .settings
-                        }
+                        activePage = .settings
                     }
                 )
 
                 // Helium-Style Quick Menu Rows (Search Helium ⌃⌥O, Open in Finder, Your Account ↗, Send Feedback, Settings ⌘,)
                 VStack(spacing: 2) {
                     menuBarQuickActionRow(icon: "magnifyingglass", title: "Command Palette & Search", trailingText: "⌃⌥O") {
-                        withAnimation(HeliumSpring.snappy) {
-                            activePage = .search
-                        }
+                        activePage = .search
                     }
                     menuBarQuickActionRow(icon: "waveform.path.ecg", title: "Activity & Safe-Write Health", trailingText: model.actionableIssues.isEmpty ? "✓" : "\(model.actionableIssues.count)") {
                         model.navigateToMainWindow(destination: .activity)
@@ -4623,9 +4617,7 @@ public struct MenuBarPopoverView: View {
                         model.showFeedbackSheet = true
                     }
                     menuBarQuickActionRow(icon: "gearshape", title: "Settings", trailingText: "⌘,") {
-                        withAnimation(HeliumSpring.snappy) {
-                            activePage = .settings
-                        }
+                        activePage = .settings
                     }
                 }
                 .padding(6)
@@ -4691,7 +4683,7 @@ public struct MenuBarPopoverView: View {
                 MultiAccountSegmentedBar(accounts: model.linkedAccounts, totalCapacity: model.totalPoolBytes)
                     .frame(height: 6)
 
-                HStack {
+                HStack(spacing: 6) {
                     SignInWithGoogleButton(
                         title: model.hasRealGoogleAccount ? "+ Add Google Drive" : "Sign in with Google",
                         style: .compact,
@@ -4700,14 +4692,16 @@ public struct MenuBarPopoverView: View {
                         NSApp.activate(ignoringOtherApps: true)
                         model.startBrowserOAuthFlow()
                     }
+                    .fixedSize(horizontal: true, vertical: false)
 
-                    Spacer()
+                    Spacer(minLength: 4)
 
                     Button("Open Window") {
                         model.navigateToMainWindow(destination: .home)
                     }
                     .buttonStyle(.link)
                     .font(.caption.bold())
+                    .fixedSize(horizontal: true, vertical: false)
 
                     Text("•")
                         .font(.caption2)
@@ -4719,17 +4713,19 @@ public struct MenuBarPopoverView: View {
                     }
                     .buttonStyle(.link)
                     .font(.caption.bold())
+                    .fixedSize(horizontal: true, vertical: false)
 
                     Text("•")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
-                    Button("Quit Helium") {
+                    Button("Quit") {
                         NSApplication.shared.terminate(nil)
                     }
                     .buttonStyle(.link)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
 
                 HStack {
@@ -4738,11 +4734,11 @@ public struct MenuBarPopoverView: View {
                 }
                 .padding(.top, 2)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
             .padding(.bottom, 8)
         }
         .padding(8)
-        .frame(width: 372)
+        .frame(width: 396, alignment: .top)
     }
 
     private func menuBarQuickActionRow(
@@ -4781,9 +4777,7 @@ public struct MenuBarPopoverView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Button {
-                        withAnimation(HeliumSpring.snappy) {
-                            activePage = .home
-                        }
+                        activePage = .home
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
@@ -4938,7 +4932,7 @@ public struct MenuBarPopoverView: View {
                         }
                     }
                 }
-                .frame(height: 220)
+                .frame(height: 300)
             }
         }
     }
@@ -4949,9 +4943,7 @@ public struct MenuBarPopoverView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Button {
-                        withAnimation(HeliumSpring.snappy) {
-                            activePage = .home
-                        }
+                        activePage = .home
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
@@ -4985,9 +4977,7 @@ public struct MenuBarPopoverView: View {
                     ForEach(SettingsTab.allCases) { tab in
                         let isSelected = model.selectedSettingsTab == tab
                         Button {
-                            withAnimation(HeliumSpring.snappy) {
-                                model.selectedSettingsTab = tab
-                            }
+                            model.selectedSettingsTab = tab
                         } label: {
                             VStack(spacing: 3) {
                                 HeliumAsset.icon(tab.iconName, size: 13, tint: isSelected ? .blue : .secondary)
@@ -5068,28 +5058,119 @@ public struct MenuBarPopoverView: View {
                             .labelsHidden()
                             .controlSize(.small)
 
+                            HStack(spacing: 4) {
+                                Text("Account Upload Routing")
+                                    .font(.caption.bold())
+                                Spacer()
+                            }
+                            Picker("", selection: Binding(
+                                get: { model.accountRoutingStrategy },
+                                set: { strategy in Task { await model.setAccountRoutingStrategy(strategy) } }
+                            )) {
+                                ForEach(AccountRoutingStrategy.allCases) { strategy in
+                                    Text(strategy.displayTitle).tag(strategy)
+                                }
+                            }
+                            .labelsHidden()
+                            .controlSize(.small)
+
                             Divider()
 
-                            ForEach(model.linkedAccounts) { acc in
-                                HStack {
-                                    Text("#\(acc.uploadPriority)")
-                                        .font(.caption2.bold())
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 1)
-                                        .background(Capsule().fill(Color.blue.opacity(0.15)))
-                                    Text(acc.email)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    if acc.uploadPriority > 1 {
-                                        Button("Make #1") {
-                                            Task {
-                                                await model.prioritiseAccountFirst(acc.id)
-                                                await model.setPreferredUploadAccount(acc.id)
-                                            }
+                            HStack {
+                                Text("Connected Google Drives (\(model.linkedAccounts.count))")
+                                    .font(.caption.bold())
+                                Spacer()
+                                Button {
+                                    model.navigateToMainWindow(destination: .pool)
+                                    model.showMultiProtocolConnectSheet = true
+                                } label: {
+                                    Label("+ S3 / R2 / NAS", systemImage: "externaldrive.badge.plus")
+                                        .font(.system(size: 10, weight: .semibold))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                            }
+
+                            if model.linkedAccounts.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "externaldrive.badge.person.crop")
+                                            .font(.title3)
+                                            .foregroundStyle(.blue)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("No Google Drive connected yet")
+                                                .font(.caption.bold())
+                                            Text("Sign in with one or more Google accounts to pool their free storage into /Volumes/Helium.")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
                                         }
-                                        .controlSize(.mini)
                                     }
+                                    SignInWithGoogleButton(
+                                        title: "Sign in with Google",
+                                        style: .compact,
+                                        isLoading: model.isSigningInWithGoogle
+                                    ) {
+                                        NSApp.activate(ignoringOtherApps: true)
+                                        model.startBrowserOAuthFlow()
+                                    }
+                                }
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(Color.blue.opacity(0.08))
+                                )
+                            } else {
+                                ForEach(model.linkedAccounts) { acc in
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        HStack(spacing: 6) {
+                                            Text("#\(acc.uploadPriority)")
+                                                .font(.caption2.bold())
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Capsule().fill(Color.blue.opacity(0.16)))
+                                                .foregroundStyle(.blue)
+                                            VStack(alignment: .leading, spacing: 1) {
+                                                Text(acc.displayName)
+                                                    .font(.caption.bold())
+                                                    .lineLimit(1)
+                                                Text(acc.email)
+                                                    .font(.system(size: 10))
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
+                                            }
+                                            Spacer()
+                                            if acc.uploadPriority > 1 {
+                                                Button("Make #1") {
+                                                    Task {
+                                                        await model.prioritiseAccountFirst(acc.id)
+                                                        await model.setPreferredUploadAccount(acc.id)
+                                                    }
+                                                }
+                                                .controlSize(.mini)
+                                            }
+                                            Button(acc.isUploadPaused ? "Resume" : "Pause") {
+                                                Task {
+                                                    await model.toggleAccountUploadPaused(acc.id)
+                                                }
+                                            }
+                                            .controlSize(.mini)
+                                        }
+                                        HStack {
+                                            Text("\(ByteCountFormatter.string(fromByteCount: acc.quotaUsedBytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: acc.quotaLimitBytes, countStyle: .file))")
+                                                .font(.system(size: 10).monospacedDigit())
+                                                .foregroundStyle(.secondary)
+                                            Spacer()
+                                            Text("\(ByteCountFormatter.string(fromByteCount: acc.freeBytes, countStyle: .file)) free")
+                                                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                                                .foregroundStyle(.blue)
+                                        }
+                                    }
+                                    .padding(8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(Color.primary.opacity(0.04))
+                                    )
                                 }
                             }
 
@@ -5155,7 +5236,7 @@ public struct MenuBarPopoverView: View {
                     }
                     .padding(.vertical, 4)
                 }
-                .frame(height: 195)
+                .frame(height: 315)
             }
         }
     }

@@ -685,7 +685,18 @@ public final class AppModel: ObservableObject {
                   let decoded = try? JSONDecoder().decode([LinkedGoogleAccount].self, from: data) else {
                 return []
             }
-            return decoded
+            return decoded.map { rawAcc in
+                var acc = rawAcc
+                if let rtData = store.get("helium.oauth.rt.\(acc.id)"),
+                   let rt = String(data: rtData, encoding: .utf8), !rt.isEmpty {
+                    acc.refreshToken = rt
+                }
+                if let atData = store.get("helium.oauth.at.\(acc.id)"),
+                   let at = String(data: atData, encoding: .utf8), !at.isEmpty {
+                    acc.accessToken = at
+                }
+                return acc
+            }
         }()
         let initialSavedManifests: [String: PoolItemManifest] = {
             guard let data = try? Data(contentsOf: manifestsFileURL),

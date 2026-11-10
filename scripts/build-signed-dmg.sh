@@ -98,8 +98,16 @@ if [[ -f "$WORKSPACE_DIR/google-services.json" ]]; then
 elif [[ -f "$WORKSPACE_DIR/.local-credentials/google-services.json" ]]; then
     cp "$WORKSPACE_DIR/.local-credentials/google-services.json" "$CONTENTS/Resources/google-services.json"
 fi
-if [[ -f "$CONTENTS/Resources/GoogleService-Info.plist" && -z "${HELIUM_REVERSED_CLIENT_ID:-}" ]]; then
-    HELIUM_REVERSED_CLIENT_ID="$(/usr/libexec/PlistBuddy -c 'Print :REVERSED_CLIENT_ID' "$CONTENTS/Resources/GoogleService-Info.plist" 2>/dev/null || true)"
+if [[ -f "$CONTENTS/Resources/GoogleService-Info.plist" ]]; then
+    mkdir -p "$HOME/Library/Application Support/Helium"
+    cp "$CONTENTS/Resources/GoogleService-Info.plist" "$HOME/Library/Application Support/Helium/GoogleService-Info.plist" 2>/dev/null || true
+    if [[ -z "${HELIUM_REVERSED_CLIENT_ID:-}" ]]; then
+        HELIUM_REVERSED_CLIENT_ID="$(/usr/libexec/PlistBuddy -c 'Print :REVERSED_CLIENT_ID' "$CONTENTS/Resources/GoogleService-Info.plist" 2>/dev/null || true)"
+    fi
+fi
+if [[ -f "$CONTENTS/Resources/google-services.json" ]]; then
+    mkdir -p "$HOME/Library/Application Support/Helium"
+    cp "$CONTENTS/Resources/google-services.json" "$HOME/Library/Application Support/Helium/google-services.json" 2>/dev/null || true
 fi
 
 if [[ -f "$WORKSPACE_DIR/Resources/PrivacyInfo.xcprivacy" ]]; then

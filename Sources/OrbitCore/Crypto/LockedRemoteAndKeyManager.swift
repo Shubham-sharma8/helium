@@ -42,10 +42,56 @@ public final class PersistentSecretStore: SecretStore, @unchecked Sendable {
 
     public init(fileURL: URL = SharedContainer.directoryURL().appendingPathComponent(".helium-secrets.json")) {
         self.fileURL = fileURL
+        var loaded: [String: String] = [:]
+
+        // Merge any earlier .*-secrets.json vault files in the same container directory first
+        let dir = fileURL.deletingLastPathComponent()
+        if let siblings = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            for sibling in siblings where sibling != fileURL
+                && sibling.lastPathComponent.hasPrefix(".")
+                && sibling.lastPathComponent.hasSuffix("-secrets.json") {
+                if let sibData = try? Data(contentsOf: sibling),
+                   let sibDict = try? JSONDecoder().decode([String: String].self, from: sibData) {
+                    for (rawKey, val) in sibDict {
+                        let normalizedKey = Self.normalizeSecretKey(rawKey)
+                        if loaded[normalizedKey] == nil {
+                            loaded[normalizedKey] = val
+                        }
+                    }
+                }
+            }
+        }
+
         if let data = try? Data(contentsOf: fileURL),
            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
-            self.cache = decoded
+            for (rawKey, val) in decoded {
+                loaded[Self.normalizeSecretKey(rawKey)] = val
+            }
         }
+
+        self.cache = loaded
+        if !loaded.isEmpty {
+            try? flushLocked()
+        }
+    }
+
+    private static func normalizeSecretKey(_ key: String) -> String {
+        if let suffix = key.components(separatedBy: ".oauth.rt.").last, key.contains(".oauth.rt.") {
+            return "helium.oauth.rt.\(suffix)"
+        }
+        if let suffix = key.components(separatedBy: ".oauth.at.").last, key.contains(".oauth.at.") {
+            return "helium.oauth.at.\(suffix)"
+        }
+        if key.contains(".zk.masterKey.") {
+            return "helium.zk.masterKey.v1"
+        }
+        return key
+    }
+
+    public func allKeys() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(cache.keys)
     }
 
     private func flushLocked() throws {

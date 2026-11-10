@@ -473,13 +473,16 @@ public struct SignInWithGoogleButton: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
                         .font(style == .hero ? .headline : (style == .compact ? .caption.bold() : .subheadline.bold()))
+                        .lineLimit(1)
                     if let subtitle, style == .hero {
                         Text(subtitle)
                             .font(.caption2)
+                            .lineLimit(1)
                             .opacity(0.88)
                     }
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, style == .hero ? 18 : (style == .compact ? 10 : 14))
             .padding(.vertical, style == .hero ? 10 : (style == .compact ? 5 : 7))
             .background(
