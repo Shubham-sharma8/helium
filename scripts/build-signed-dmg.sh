@@ -6,8 +6,8 @@ export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
 APP_NAME="Helium"
 BUNDLE_ID="com.cogify.helium"
-APP_VERSION="0.0.2"
-APP_BUILD="2"
+APP_VERSION="0.0.3"
+APP_BUILD="3"
 
 # Detect Apple Developer signing identity automatically (or fall back to APPLE_SIGN_IDENTITY / ad-hoc)
 DETECTED_IDENTITY="$(security find-identity -v -p codesigning | grep -E 'Developer ID Application|Apple Development|Apple Distribution' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"

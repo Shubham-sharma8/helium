@@ -331,11 +331,11 @@ public enum SupportEmailTemplate: String, CaseIterable, Identifiable, Sendable {
     public var defaultSubject: String {
         switch self {
         case .support:
-            return "Helium v0.0.1 (Build 1) — Support & Bug Report"
+            return "Helium v\(AppModel.appVersion) (Build \(AppModel.appBuild)) — Support & Bug Report"
         case .featureRequest:
-            return "Helium v0.0.1 — Feature Request & Product Idea"
+            return "Helium v\(AppModel.appVersion) — Feature Request & Product Idea"
         case .poolHelp:
-            return "Helium v0.0.1 — Google Drive Storage Pool Question"
+            return "Helium v\(AppModel.appVersion) — Google Drive Storage Pool Question"
         case .business:
             return "Helium × Cogify — Enterprise & Partnership Inquiry"
         }
@@ -344,7 +344,7 @@ public enum SupportEmailTemplate: String, CaseIterable, Identifiable, Sendable {
     public var defaultPromptPlaceholder: String {
         switch self {
         case .support:
-            return "Hi Cogify Team,\n\nI am using Helium v0.0.1 on macOS and encountered the following issue:\n• Steps to reproduce:\n• Expected behavior:\n• Actual behavior:\n"
+            return "Hi Cogify Team,\n\nI am using Helium v\(AppModel.appVersion) on macOS and encountered the following issue:\n• Steps to reproduce:\n• Expected behavior:\n• Actual behavior:\n"
         case .featureRequest:
             return "Hi Cogify Team,\n\nI would love to see the following feature or workflow improvement in Helium:\n• Feature idea:\n• How it would help my Google Drive workflow:\n"
         case .poolHelp:
@@ -409,9 +409,13 @@ public struct RealtimeChunkReadEvent: Identifiable, Equatable, Sendable {
 
 @MainActor
 public final class AppModel: ObservableObject {
-    public static let appVersion = "0.0.2"
-    public static let appBuild = "2"
-    public static let supportEmail = "connect@cogify.me"
+    nonisolated public static let appVersion = "0.0.3"
+    nonisolated public static let appBuild = "3"
+    nonisolated public static let supportEmail = "connect@cogify.me"
+    nonisolated public static let githubRepoSlug = "Shubham-sharma8/helium"
+    nonisolated public static let githubReleasesURL = "https://github.com/Shubham-sharma8/helium/releases"
+    nonisolated public static let githubLatestReleaseAPI = "https://api.github.com/repos/Shubham-sharma8/helium/releases/latest"
+    nonisolated public static let githubAllReleasesAPI = "https://api.github.com/repos/Shubham-sharma8/helium/releases"
     // MARK: - Navigation & Lifecycle State
     @Published public var phase: AppPhase = .active
     @Published public var selectedSidebarDestination: SidebarDestination = .home
@@ -498,7 +502,13 @@ public final class AppModel: ObservableObject {
     @Published public var finderActionsEnabled: Bool = true
     @Published public var sendErrorReports: Bool = false
     @Published public var installUpdatesAutomatically: Bool = true
-    @Published public var lastUpdateCheckText: String = "Helium v0.0.1 (Build 1) is up to date."
+    @Published public var lastUpdateCheckText: String = "Helium v0.0.3 (Build 3) — Ready to check GitHub Releases."
+    @Published public var isCheckingForUpdates: Bool = false
+    @Published public var isDownloadingUpdate: Bool = false
+    @Published public var updateAvailableVersion: String? = nil
+    @Published public var updateDownloadURL: URL? = nil
+    @Published public var updateReleasePageURL: URL = URL(string: "https://github.com/Shubham-sharma8/helium/releases")!
+    @Published public var updateReleaseNotes: String = ""
     @Published public var feedbackText: String = ""
     @Published public var feedbackIncludeDiagnostics: Bool = true
     @Published public var selectedEmailTemplate: SupportEmailTemplate = .support
@@ -657,6 +667,9 @@ public final class AppModel: ObservableObject {
         }
         if defaults.object(forKey: "helium.runInTaskbarOnly") != nil {
             self.runInTaskbarOnly = defaults.bool(forKey: "helium.runInTaskbarOnly")
+        }
+        if defaults.object(forKey: "helium.installUpdatesAutomatically") != nil {
+            self.installUpdatesAutomatically = defaults.bool(forKey: "helium.installUpdatesAutomatically")
         }
         let askedStartup = defaults.bool(forKey: "helium.hasAskedStartupPreferences")
             || defaults.bool(forKey: "helium.dontAskStartupPreferencesAgain")
@@ -1094,6 +1107,11 @@ public final class AppModel: ObservableObject {
             startBackgroundStreamCachePrewarm()
         }
         startFolderWatcherLoop()
+        if installUpdatesAutomatically {
+            Task { @MainActor [weak self] in
+                await self?.checkForUpdatesAsync(silent: true)
+            }
+        }
     }
 
     public func rebuildActiveDriveInstance() async {
@@ -3868,9 +3886,253 @@ public final class AppModel: ObservableObject {
         statusMessage = "Dehydrated all unpinned files to Zero bytes on disk. Your files stay safe in Google Drive."
     }
 
+    // MARK: - GitHub Releases Auto-Update & Check for Updates (https://github.com/Shubham-sharma8/helium/releases)
+    private struct GitHubReleaseAssetDTO: Decodable, Sendable {
+        let name: String
+        let browser_download_url: String
+        let size: Int64?
+    }
+
+    private struct GitHubReleaseDTO: Decodable, Sendable {
+        let tag_name: String
+        let name: String?
+        let body: String?
+        let html_url: String
+        let draft: Bool?
+        let prerelease: Bool?
+        let published_at: String?
+        let assets: [GitHubReleaseAssetDTO]?
+    }
+
+    public func setInstallUpdatesAutomatically(_ enabled: Bool) {
+        installUpdatesAutomatically = enabled
+        UserDefaults.standard.set(enabled, forKey: "helium.installUpdatesAutomatically")
+        if enabled {
+            Task { @MainActor [weak self] in
+                await self?.checkForUpdatesAsync(silent: true)
+            }
+        }
+    }
+
+    public func openGitHubReleasesPage() {
+        NSWorkspace.shared.open(updateReleasePageURL)
+    }
+
     public func checkForUpdates() {
-        lastUpdateCheckText = "Checked just now — Helium v0.0.1 (Build 1) is the latest version."
+        Task { @MainActor [weak self] in
+            await self?.checkForUpdatesAsync(silent: false)
+        }
+    }
+
+    public func checkForUpdatesAsync(silent: Bool = false) async {
+        guard !isCheckingForUpdates else { return }
+        isCheckingForUpdates = true
+        if !silent {
+            lastUpdateCheckText = "Checking GitHub Releases (Shubham-sharma8/helium)…"
+            statusMessage = lastUpdateCheckText
+        }
+        defer {
+            isCheckingForUpdates = false
+        }
+
+        do {
+            let release = try await fetchLatestGitHubRelease()
+            if let release {
+                let remoteVersion = Self.normalizedVersionString(from: release.tag_name)
+                if let pageURL = URL(string: release.html_url) {
+                    updateReleasePageURL = pageURL
+                }
+                updateReleaseNotes = (release.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let preferredAsset = release.assets?.first(where: { $0.name.lowercased().hasSuffix(".dmg") })
+                    ?? release.assets?.first(where: { $0.name.lowercased().hasSuffix(".zip") || $0.name.lowercased().hasSuffix(".pkg") })
+
+                let cmp = Self.compareSemanticVersions(remoteVersion, Self.appVersion)
+                if cmp > 0 {
+                    updateAvailableVersion = remoteVersion
+                    if let assetURLStr = preferredAsset?.browser_download_url,
+                       let assetURL = URL(string: assetURLStr) {
+                        updateDownloadURL = assetURL
+                    } else {
+                        updateDownloadURL = updateReleasePageURL
+                    }
+                    lastUpdateCheckText = "New update available on GitHub: Helium v\(remoteVersion) (installed: v\(Self.appVersion))."
+                    statusMessage = lastUpdateCheckText
+
+                    if installUpdatesAutomatically, preferredAsset != nil {
+                        await downloadAndInstallUpdate(autoTriggered: silent)
+                    }
+                } else {
+                    updateAvailableVersion = nil
+                    updateDownloadURL = nil
+                    lastUpdateCheckText = "Checked just now — Helium v\(Self.appVersion) (Build \(Self.appBuild)) is up to date (GitHub latest: v\(remoteVersion))."
+                    if !silent {
+                        statusMessage = lastUpdateCheckText
+                    }
+                }
+            } else {
+                updateAvailableVersion = nil
+                updateDownloadURL = nil
+                lastUpdateCheckText = "Checked just now — Helium v\(Self.appVersion) (Build \(Self.appBuild)) is the latest version on GitHub Releases."
+                if !silent {
+                    statusMessage = lastUpdateCheckText
+                }
+            }
+        } catch {
+            if !silent {
+                lastUpdateCheckText = "Could not reach GitHub Releases (\(error.localizedDescription)). Installed: Helium v\(Self.appVersion) (Build \(Self.appBuild))."
+                statusMessage = lastUpdateCheckText
+            }
+        }
+    }
+
+    private func fetchLatestGitHubRelease() async throws -> GitHubReleaseDTO? {
+        guard let latestURL = URL(string: Self.githubLatestReleaseAPI) else { return nil }
+        var req = URLRequest(url: latestURL)
+        req.timeoutInterval = 15
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("Helium-macOS/\(Self.appVersion)", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+        noteNetworkContact(
+            host: "api.github.com",
+            purpose: "GitHub Releases update check (Shubham-sharma8/helium)"
+        )
+
+        if httpStatus == 200 {
+            return try JSONDecoder().decode(GitHubReleaseDTO.self, from: data)
+        }
+
+        // Fallback to /releases list if /releases/latest returned 404 (e.g. pre-release or no releases published yet)
+        guard let allURL = URL(string: Self.githubAllReleasesAPI) else { return nil }
+        var allReq = URLRequest(url: allURL)
+        allReq.timeoutInterval = 15
+        allReq.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        allReq.setValue("Helium-macOS/\(Self.appVersion)", forHTTPHeaderField: "User-Agent")
+
+        let (allData, allResp) = try await URLSession.shared.data(for: allReq)
+        let allStatus = (allResp as? HTTPURLResponse)?.statusCode ?? 0
+        if allStatus == 200,
+           let list = try? JSONDecoder().decode([GitHubReleaseDTO].self, from: allData) {
+            return list.first(where: { ($0.draft ?? false) == false })
+        }
+        return nil
+    }
+
+    public func downloadAndInstallUpdate(autoTriggered: Bool = false) async {
+        guard !isDownloadingUpdate else { return }
+        guard let targetURL = updateDownloadURL else {
+            openGitHubReleasesPage()
+            return
+        }
+        let targetVersion = updateAvailableVersion ?? Self.appVersion
+        let isDirectDMG = targetURL.pathExtension.lowercased() == "dmg"
+            || targetURL.absoluteString.lowercased().contains(".dmg")
+
+        if !isDirectDMG {
+            NSWorkspace.shared.open(targetURL)
+            return
+        }
+
+        isDownloadingUpdate = true
+        lastUpdateCheckText = "Downloading Helium v\(targetVersion) installer from GitHub Releases…"
         statusMessage = lastUpdateCheckText
+        defer {
+            isDownloadingUpdate = false
+        }
+
+        do {
+            var req = URLRequest(url: targetURL)
+            req.setValue("Helium-macOS/\(Self.appVersion)", forHTTPHeaderField: "User-Agent")
+            let (tempFileURL, response) = try await URLSession.shared.download(for: req)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+            guard (200..<300).contains(status) else {
+                throw URLError(.badServerResponse)
+            }
+
+            let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
+            let dmgDestURL = downloadsDir.appendingPathComponent("Helium-\(targetVersion).dmg")
+            try? FileManager.default.removeItem(at: dmgDestURL)
+            try FileManager.default.moveItem(at: tempFileURL, to: dmgDestURL)
+
+            noteNetworkContact(
+                host: targetURL.host ?? "github.com",
+                purpose: "Downloaded Helium v\(targetVersion) DMG from GitHub Releases"
+            )
+
+            // Mount the DMG and attempt automatic in-place update of /Applications/Helium.app
+            let mountPoint = "/tmp/HeliumUpdateMount-\(targetVersion)"
+            try? FileManager.default.removeItem(atPath: mountPoint)
+            let attachProc = Process()
+            attachProc.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+            attachProc.arguments = ["attach", dmgDestURL.path, "-mountpoint", mountPoint, "-nobrowse", "-readonly", "-quiet"]
+            try? attachProc.run()
+            attachProc.waitUntilExit()
+
+            let mountedAppURL = URL(fileURLWithPath: mountPoint).appendingPathComponent("Helium.app")
+            let applicationsAppURL = URL(fileURLWithPath: "/Applications/Helium.app")
+
+            if attachProc.terminationStatus == 0,
+               FileManager.default.fileExists(atPath: mountedAppURL.path),
+               FileManager.default.isWritableFile(atPath: "/Applications") {
+                let copyProc = Process()
+                copyProc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                copyProc.arguments = [mountedAppURL.path, applicationsAppURL.path]
+                try? copyProc.run()
+                copyProc.waitUntilExit()
+
+                let detachProc = Process()
+                detachProc.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+                detachProc.arguments = ["detach", mountPoint, "-quiet", "-force"]
+                try? detachProc.run()
+                detachProc.waitUntilExit()
+
+                if copyProc.terminationStatus == 0 {
+                    updateAvailableVersion = nil
+                    lastUpdateCheckText = "Updated to Helium v\(targetVersion) in /Applications/Helium.app! Relaunch Helium to complete update."
+                    statusMessage = lastUpdateCheckText
+                    return
+                }
+            }
+
+            // Fallback: open the downloaded DMG in Finder so the user can drag Helium.app to /Applications
+            NSWorkspace.shared.open(dmgDestURL)
+            lastUpdateCheckText = "Downloaded Helium-\(targetVersion).dmg to ~/Downloads and opened installer."
+            statusMessage = lastUpdateCheckText
+        } catch {
+            lastUpdateCheckText = "Automatic download failed (\(error.localizedDescription)). Opening GitHub Releases page…"
+            statusMessage = lastUpdateCheckText
+            if !autoTriggered {
+                openGitHubReleasesPage()
+            }
+        }
+    }
+
+    nonisolated public static func normalizedVersionString(from rawTag: String) -> String {
+        var cleaned = rawTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        while cleaned.hasPrefix("v") || cleaned.hasPrefix("V") {
+            cleaned.removeFirst()
+        }
+        if let dashIndex = cleaned.firstIndex(of: "-") {
+            cleaned = String(cleaned[..<dashIndex])
+        }
+        return cleaned.isEmpty ? "0.0.0" : cleaned
+    }
+
+    nonisolated public static func compareSemanticVersions(_ lhs: String, _ rhs: String) -> Int {
+        let lhsParts = normalizedVersionString(from: lhs).split(separator: ".").map { Int($0) ?? 0 }
+        let rhsParts = normalizedVersionString(from: rhs).split(separator: ".").map { Int($0) ?? 0 }
+        let count = max(lhsParts.count, rhsParts.count)
+        for idx in 0..<count {
+            let l = idx < lhsParts.count ? lhsParts[idx] : 0
+            let r = idx < rhsParts.count ? rhsParts[idx] : 0
+            if l != r {
+                return l > r ? 1 : -1
+            }
+        }
+        return 0
     }
 
     // MARK: - Interactive System & Pool Health Doctor + Placement Simulator

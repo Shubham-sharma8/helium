@@ -1370,7 +1370,7 @@ public struct HeliumHelpCenterSheet: View {
                             .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
                     )
 
-                    Toggle("Include Helium v0.0.1 & Storage Pool diagnostics in email", isOn: $model.feedbackIncludeDiagnostics)
+                    Toggle("Include Helium v\(AppModel.appVersion) & Storage Pool diagnostics in email", isOn: $model.feedbackIncludeDiagnostics)
                         .font(.caption)
 
                     HStack(spacing: 10) {

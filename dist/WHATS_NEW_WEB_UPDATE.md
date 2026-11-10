@@ -1,7 +1,8 @@
-# What's New in Helium v0.0.2 (Build 2) — Web Update & Release Notes
+# What's New in Helium v0.0.3 (Build 3) — Web Update & Release Notes
 
 **Release Date:** November 2026  
 **Installer:** `Helium-macOS-Installer.dmg` (Apple Developer Signed • Universal macOS 15.4+)  
+**GitHub Releases:** [github.com/Shubham-sharma8/helium/releases](https://github.com/Shubham-sharma8/helium/releases)  
 **Website:** [cogify.me/helium](https://cogify.me/helium)
 
 ---
@@ -9,9 +10,11 @@
 ## Copy-Paste Web Update Banner / Changelog Card (`cogify.me/helium`)
 
 ### Headline
-**Helium v0.0.2 — Universal Storage Pool, Scheduled Mac Backups, Time Travel Snapshots & 5-Step Safe-Write Verification**
+**Helium v0.0.3 — GitHub Releases Auto-Updater, Persistent Multi-Drive OAuth Sign-In, Universal Storage Pool, Scheduled Mac Backups & Time Travel Snapshots**
 
 ### What's New
+- **GitHub Releases Auto-Updater (`Settings → Updates`)**: Checks [`github.com/Shubham-sharma8/helium/releases`](https://github.com/Shubham-sharma8/helium/releases) for new versions and supports 1-click or automatic `.dmg` download & installation.
+- **Persistent Multi-Drive OAuth Sign-In**: Keeps all linked Google Drive accounts signed in across app restarts with automatic refresh-token recovery.
 - **Pool 25+ Cloud & Self-Hosted Storage Providers**: Combine unlimited **Google Drives** alongside **Amazon S3**, **Cloudflare R2**, **Backblaze B2**, **Wasabi**, **Hetzner Object Storage**, **DigitalOcean Spaces**, **Storj**, **Tigris**, **Google Cloud Storage (HMAC)**, **Nextcloud / ownCloud / Fastmail / pCloud / Synology WebDAV**, **Hetzner Storage Box (SFTP)**, **rsync.net**, **SMB / Local NAS / Azure Files**, **Dropbox / OneDrive / Box (BYOK)**, and **External SSDs** inside `/Volumes/Helium`.
 - **Scheduled Add-Only Mac Folder Backups (`⌘⇧K`)**: Automatically back up `~/Desktop`, `~/Documents`, `~/Pictures`, or any project folder to `/Volumes/Helium/Backups` (`Hourly`, `Daily`, `Weekly`, or `Manual`). Includes live folder scan previews showing exact gigabytes saved by skipping `Caches`, `node_modules`, and `>2 GB` files, **Skip on Personal Hotspot**, a countdown ring, 14-run history dots, and **add-only safety** (deleting a local file on your Mac never deletes its cloud backup copy).
 - **Time Travel: Point-in-Time Snapshots & "Then vs. Now" Diffs (`⌘⇧Y`)**: Capture instant snapshots of your storage pool, inspect **Then vs. Now** visual diffs (`Deleted since then`, `Changed since then`, `Added after snapshot`, `Unchanged`), and 1-click **Restore Copy** or **Restore Version** alongside the 30-day Recently Deleted trash.

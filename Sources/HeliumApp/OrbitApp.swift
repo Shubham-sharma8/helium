@@ -75,7 +75,7 @@ struct OrbitApp: App {
 
     init() {
         if CommandLine.arguments.contains("--version") {
-            print("Helium macOS App v0.0.2 (Build 2 — Multi-Google-Drive Pool Edition)")
+            print("Helium macOS App v\(AppModel.appVersion) (Build \(AppModel.appBuild) — Multi-Google-Drive Pool Edition)")
             exit(0)
         }
         DispatchQueue.main.async {

@@ -1,12 +1,17 @@
-# What's New in Helium v0.0.2 (Build 2)
+# What's New in Helium v0.0.3 (Build 3)
 
 **Release Date:** November 2026  
 **Download:** `Helium-macOS-Installer.dmg` (Apple Developer Signed • Universal macOS 15.4+)  
+**GitHub Releases:** [github.com/Shubham-sharma8/helium/releases](https://github.com/Shubham-sharma8/helium/releases)  
 **Website:** [cogify.me/helium](https://cogify.me/helium)
 
 ---
 
 ## Highlights (TL;DR for Website Update Banner)
+
+- **GitHub Releases Auto-Update & Check for Updates (`Settings → Updates`)**: Directly checks [`github.com/Shubham-sharma8/helium/releases`](https://github.com/Shubham-sharma8/helium/releases) for new releases, displays release notes, and supports automatic or 1-click `.dmg` download and in-place installation to `/Applications/Helium.app`.
+- **Persistent Multi-Account Google Drive Sign-In**: Hardened OAuth 2.0 refresh token persistence and automatic account recovery across app restarts and macOS reboots.
+- **Refined Menu Bar Popover & Pool Workspace Layout**: Top-aligned menu bar settings & search panels and responsive two-row toolbar layout in the Google Drive Pool header.
 
 - **Universal Cloud & Self-Hosted Storage Pool**: Beyond pooling unlimited **Google Drive** accounts, you can now connect **25+ storage providers** into `/Volumes/Helium` — including **Amazon S3**, **Cloudflare R2**, **Backblaze B2**, **Wasabi**, **Hetzner Object Storage**, **DigitalOcean Spaces**, **Storj**, **Tigris**, **Google Cloud Storage (HMAC)**, **Nextcloud / ownCloud / Fastmail / pCloud / Synology WebDAV**, **Hetzner Storage Box (SFTP)**, **rsync.net**, **SMB / Local NAS / Azure Files**, **Dropbox / OneDrive / Box (BYOK)**, and **External USB/Thunderbolt SSDs**.
 - **Scheduled Add-Only Mac Folder Backups (`⌘⇧K`)**: Protect `~/Desktop`, `~/Documents`, `~/Pictures`, or any project workspace on an **Hourly, Daily, Weekly, or Manual** schedule with live exclusion-savings previews (`Caches`, `node_modules`, `.git`, `Files > 2 GB`), **Skip on Personal Hotspot**, 14-run history dots, and **add-only safety** (deleting a file on your Mac never deletes its backup copy in `/Volumes/Helium`).

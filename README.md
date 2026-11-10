@@ -5,7 +5,7 @@
 
   <p>
     <a href="https://cogify.me/helium"><img src="https://img.shields.io/badge/Website-cogify.me%2Fhelium-007AFF?style=flat-square" alt="Website" /></a>
-    <a href="WHATS_NEW.md"><img src="https://img.shields.io/badge/Release-v0.0.2-5856D6?style=flat-square" alt="Release v0.0.2" /></a>
+    <a href="https://github.com/Shubham-sharma8/helium/releases"><img src="https://img.shields.io/badge/Release-v0.0.3-5856D6?style=flat-square" alt="Release v0.0.3" /></a>
     <img src="https://img.shields.io/badge/Platform-macOS%2015.4%2B-111111?style=flat-square&logo=apple" alt="macOS 15.4+" />
     <img src="https://img.shields.io/badge/Swift-6.0-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift 6.0" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-34C759?style=flat-square" alt="MIT License" /></a>
@@ -14,7 +14,11 @@
 
 ---
 
-## What's New in v0.0.2
+## What's New in v0.0.3
+
+- **GitHub Releases Auto-Update & Check for Updates (`Settings → Updates`)**: Built-in updater connected directly to [`github.com/Shubham-sharma8/helium/releases`](https://github.com/Shubham-sharma8/helium/releases) that checks for new semantic versions, displays release notes, and supports 1-click or automatic `.dmg` download & in-place `/Applications/Helium.app` installation.
+- **Persistent Multi-Account OAuth Token Recovery**: Hardened `PersistentSecretStore` (`0600`) and `GoogleAccountPool` dual-store token persistence so signed-in Google Drive accounts remain connected across app restarts and system reboots.
+- **Refined Menu Bar Popover & Pool Header Layout**: Top-aligned menu bar inline Settings & Search views and clean two-row toolbar layout in the Google Drive Pool header.
 
 - **25+ Cloud & Self-Hosted Storage Presets (`StorageServicePreset`)**: Connect **Google Drive Pool**, **Amazon S3**, **Cloudflare R2**, **Backblaze B2**, **Wasabi**, **Hetzner**, **DigitalOcean Spaces**, **Storj**, **Tigris**, **Google Cloud Storage (HMAC)**, **Nextcloud / ownCloud / Fastmail / pCloud / Synology WebDAV**, **SFTP / rsync.net**, **SMB / Local NAS**, **Dropbox / OneDrive / Box (BYOK)**, and **External USB/Thunderbolt SSDs**.
 - **Scheduled Add-Only Mac Folder Backups (`⌘⇧K`)**: Protect `~/Desktop`, `~/Documents`, `~/Pictures`, or any project workspace on an Hourly, Daily, Weekly, or Manual schedule with live exclusion-savings previews, `Skip on Personal Hotspot`, 14-run history dots, and add-only safety.

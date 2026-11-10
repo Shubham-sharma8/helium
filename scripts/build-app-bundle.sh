@@ -4,8 +4,8 @@ set -euo pipefail
 WORKSPACE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
-APP_VERSION="0.0.2"
-APP_BUILD="2"
+APP_VERSION="0.0.3"
+APP_BUILD="3"
 DETECTED_IDENTITY="$(security find-identity -v -p codesigning | grep -E 'Developer ID Application|Apple Development|Apple Distribution' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
 SIGN_IDENTITY="${APPLE_SIGN_IDENTITY:-${DETECTED_IDENTITY:--}}"
 

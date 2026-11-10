@@ -6,8 +6,8 @@ export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
 APP_NAME="Helium"
 BUNDLE_ID="com.cogify.helium"
-APP_VERSION="0.0.1"
-APP_BUILD="1"
+APP_VERSION="0.0.3"
+APP_BUILD="3"
 
 ARCHIVE_PATH="$WORKSPACE_DIR/build/${APP_NAME}-${APP_VERSION}.xcarchive"
 DIRECT_ARCHIVE_PATH="$WORKSPACE_DIR/build/${APP_NAME}-DirectDistribution.xcarchive"

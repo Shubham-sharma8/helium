@@ -3677,22 +3677,70 @@ public struct OriginalFiveTabSettingsView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 12) {
                         HeliumAnimatedMascot(name: "HeliumHappy", size: 48)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Helium v0.0.1 (Build 1)")
-                                .font(.headline)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                Text("Helium v\(AppModel.appVersion) (Build \(AppModel.appBuild))")
+                                    .font(.headline)
+                                if let newVer = model.updateAvailableVersion {
+                                    Text("v\(newVer) Available")
+                                        .font(.caption2.bold())
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(Color.green.opacity(0.18)))
+                                        .foregroundStyle(.green)
+                                }
+                            }
                             Text(model.lastUpdateCheckText)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            Text("Update Source: github.com/Shubham-sharma8/helium/releases")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
                         }
                         Spacer()
+                        if model.isCheckingForUpdates || model.isDownloadingUpdate {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        if let newVer = model.updateAvailableVersion {
+                            Button("Download & Install v\(newVer)") {
+                                Task {
+                                    await model.downloadAndInstallUpdate()
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.isDownloadingUpdate)
+                        }
                         Button("Check for Updates…") {
                             model.checkForUpdates()
+                        }
+                        .disabled(model.isCheckingForUpdates || model.isDownloadingUpdate)
+                        Button("GitHub Releases ↗") {
+                            model.openGitHubReleasesPage()
+                        }
+                    }
+
+                    if !model.updateReleaseNotes.isEmpty, model.updateAvailableVersion != nil {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Latest Release Notes")
+                                .font(.caption.bold())
+                            Text(model.updateReleaseNotes)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(6)
                         }
                     }
 
                     Divider()
 
-                    Toggle("Install updates automatically", isOn: $model.installUpdatesAutomatically)
+                    Toggle(
+                        "Install updates automatically from GitHub Releases",
+                        isOn: Binding(
+                            get: { model.installUpdatesAutomatically },
+                            set: { model.setInstallUpdatesAutomatically($0) }
+                        )
+                    )
                 }
                 .padding(10)
             }
@@ -3908,7 +3956,7 @@ struct FeedbackModalSheet: View {
                     .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
             )
 
-            Toggle("Include Helium v0.0.1 technical & pool diagnostics", isOn: $model.feedbackIncludeDiagnostics)
+            Toggle("Include Helium v\(AppModel.appVersion) technical & pool diagnostics", isOn: $model.feedbackIncludeDiagnostics)
                 .font(.caption)
 
             HStack(spacing: 10) {
@@ -5238,15 +5286,56 @@ public struct MenuBarPopoverView: View {
                             .controlSize(.small)
 
                         case .updates:
-                            Toggle("Install updates automatically", isOn: $model.installUpdatesAutomatically)
-                                .font(.caption.bold())
+                            HStack(spacing: 6) {
+                                Text("Helium v\(AppModel.appVersion) (Build \(AppModel.appBuild))")
+                                    .font(.caption.bold())
+                                if model.isCheckingForUpdates || model.isDownloadingUpdate {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                }
+                                Spacer()
+                                if let newVer = model.updateAvailableVersion {
+                                    Text("v\(newVer) Ready")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(Color.green.opacity(0.18)))
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                            Toggle(
+                                "Install updates automatically",
+                                isOn: Binding(
+                                    get: { model.installUpdatesAutomatically },
+                                    set: { model.setInstallUpdatesAutomatically($0) }
+                                )
+                            )
+                            .font(.caption.bold())
                             Text(model.lastUpdateCheckText)
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
-                            Button("Check for Updates") {
-                                model.checkForUpdates()
+                                .fixedSize(horizontal: false, vertical: true)
+                            HStack(spacing: 6) {
+                                if let newVer = model.updateAvailableVersion {
+                                    Button("Install v\(newVer)") {
+                                        Task {
+                                            await model.downloadAndInstallUpdate()
+                                        }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                    .disabled(model.isDownloadingUpdate)
+                                }
+                                Button("Check for Updates") {
+                                    model.checkForUpdates()
+                                }
+                                .controlSize(.small)
+                                .disabled(model.isCheckingForUpdates || model.isDownloadingUpdate)
+                                Button("GitHub Releases ↗") {
+                                    model.openGitHubReleasesPage()
+                                }
+                                .controlSize(.small)
                             }
-                            .controlSize(.small)
                         }
                     }
                     .padding(.vertical, 4)
