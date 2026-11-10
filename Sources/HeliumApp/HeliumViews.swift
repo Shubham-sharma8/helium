@@ -2552,8 +2552,12 @@ struct GoogleDrivePoolWorkspaceView: View {
                                 HStack(spacing: 8) {
                                     Text("Google Drive Pool")
                                         .font(.title3.bold())
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
                                     Text("\(model.linkedAccounts.count) Drive\(model.linkedAccounts.count == 1 ? "" : "s") Linked")
                                         .font(.caption2.bold())
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 2)
                                         .background(Color.blue.opacity(0.16))
@@ -2563,10 +2567,24 @@ struct GoogleDrivePoolWorkspaceView: View {
                                 Text("\(ByteCountFormatter.string(fromByteCount: model.heliumPoolUsedBytes, countStyle: .file)) in Helium Pool (\(model.activePooledFilesCount) file\(model.activePooledFilesCount == 1 ? "" : "s")) • \(ByteCountFormatter.string(fromByteCount: model.totalFreeBytes, countStyle: .file)) free of \(ByteCountFormatter.string(fromByteCount: model.totalPoolBytes, countStyle: .file))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
+                            .layoutPriority(1)
 
                             Spacer(minLength: 8)
 
+                            SignInWithGoogleButton(
+                                title: "+ Add Google Drive",
+                                style: .standard,
+                                isLoading: model.isSigningInWithGoogle
+                            ) {
+                                model.startBrowserOAuthFlow()
+                            }
+                            .fixedSize()
+                        }
+
+                        // Action Toolbar Row (Sync, Search, Pool Settings, Connect S3 / WebDAV / NAS)
+                        HStack(spacing: 8) {
                             Button {
                                 Task { await model.syncWithGoogleDrive() }
                             } label: {
@@ -2609,14 +2627,7 @@ struct GoogleDrivePoolWorkspaceView: View {
                             .fixedSize()
                             .help("Connect S3, Cloudflare R2, Backblaze B2, WebDAV/Nextcloud, Hetzner Storage Box, SMB, or External SSD")
 
-                            SignInWithGoogleButton(
-                                title: "+ Add Google Drive",
-                                style: .standard,
-                                isLoading: model.isSigningInWithGoogle
-                            ) {
-                                model.startBrowserOAuthFlow()
-                            }
-                            .fixedSize()
+                            Spacer()
                         }
 
                         // Unified Multi-Account Segmented Storage Bar
@@ -4625,10 +4636,13 @@ public struct MenuBarPopoverView: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(Color(nsColor: .controlBackgroundColor).opacity(0.65))
                 )
+                Spacer(minLength: 0)
             case .search:
                 menuBarInlineSearchView
+                    .frame(maxHeight: .infinity, alignment: .top)
             case .settings:
                 menuBarInlineSettingsView
+                    .frame(maxHeight: .infinity, alignment: .top)
             }
 
             // Quick Taskbar & Bootup Toggles + Google Pool Footer inside Menu Bar Popover
@@ -4738,7 +4752,7 @@ public struct MenuBarPopoverView: View {
             .padding(.bottom, 8)
         }
         .padding(8)
-        .frame(width: 396, alignment: .top)
+        .frame(width: 396, height: 676, alignment: .top)
     }
 
     private func menuBarQuickActionRow(
@@ -4932,8 +4946,9 @@ public struct MenuBarPopoverView: View {
                         }
                     }
                 }
-                .frame(height: 300)
+                .frame(maxHeight: .infinity)
             }
+            .frame(maxHeight: .infinity, alignment: .top)
         }
     }
 
@@ -5236,8 +5251,9 @@ public struct MenuBarPopoverView: View {
                     }
                     .padding(.vertical, 4)
                 }
-                .frame(height: 315)
+                .frame(maxHeight: .infinity)
             }
+            .frame(maxHeight: .infinity, alignment: .top)
         }
     }
 }
