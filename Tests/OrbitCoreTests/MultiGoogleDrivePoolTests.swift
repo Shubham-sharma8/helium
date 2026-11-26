@@ -478,4 +478,966 @@ final class MultiGoogleDrivePoolTests: XCTestCase {
         let allAfterRestore = await pooledRemote.allManifests()
         XCTAssertEqual(allAfterRestore.first(where: { $0.item.id == uploaded.id })?.item.deleted, false)
     }
+
+    func testRestoreFromTrashFailsWithoutMarkingItemActiveWhenSegmentMoveCannotRun() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        let manifestURL = tempDir.appendingPathComponent("pool-manifests.json")
+        let itemId = "pool_file_real_123"
+        let trashedItem = RemoteItem(
+            id: itemId,
+            parentId: RemoteItem.rootID,
+            name: "important.pdf",
+            nameLocked: false,
+            kind: .file,
+            size: 1024,
+            plainSize: 1024,
+            contentVersion: 1,
+            metadataVersion: 1,
+            createdAt: 1_700_000_000_000,
+            modifiedAt: 1_700_000_000_000,
+            deleted: true
+        )
+        let manifest = PoolItemManifest(
+            item: trashedItem,
+            placementMode: .wholeFileSmartPlacement,
+            segments: [
+                PoolSegment(
+                    index: 0,
+                    accountId: "acc_real",
+                    driveFileId: "drive_file_in_recycle_bin",
+                    logicalOffset: 0,
+                    byteLength: 1024,
+                    sha256: ""
+                )
+            ]
+        )
+        let encoded = try JSONEncoder().encode([itemId: manifest])
+        try encoded.write(to: manifestURL, options: .atomic)
+
+        // Account has no access token and a short non-mock refresh token, so moveFileBetweenFolders fails immediately.
+        let acc = LinkedGoogleAccount(
+            id: "acc_real",
+            email: "real@gmail.com",
+            displayName: "Real Drive",
+            refreshToken: "expired",
+            accessToken: nil,
+            isPrimaryCatalogHost: true,
+            quotaLimitBytes: 15 * 1024 * 1024 * 1024,
+            quotaUsedBytes: 0,
+            heliumUsedBytes: 0,
+            rootFolderId: "vault_real"
+        )
+        let pool = GoogleAccountPool(accounts: [acc], transport: MockGoogleDriveCloud())
+        let pooledRemote = PooledGoogleDriveRemote(pool: pool, manifestsPersistenceURL: manifestURL)
+
+        let restored = await pooledRemote.restoreFromTrash(id: itemId)
+        XCTAssertNil(restored, "restoreFromTrash must return nil when moving a segment out of Drive Recycle Bin fails")
+
+        let stored = try await pooledRemote.manifest(for: itemId)
+        XCTAssertTrue(stored.item.deleted, "Item must remain marked deleted in memory when restore fails")
+
+        let persistedData = try Data(contentsOf: manifestURL)
+        let persisted = try JSONDecoder().decode([String: PoolItemManifest].self, from: persistedData)
+        XCTAssertEqual(persisted[itemId]?.item.deleted, true, "Persisted manifest must remain deleted when restore fails")
+    }
+
+    func testShouldSkipRecycleBinSyncRespectsRestoreGraceWindow() async throws {
+        let mockCloud = MockGoogleDriveCloud()
+        let gb: Int64 = 1024 * 1024 * 1024
+        let acc = LinkedGoogleAccount(
+            id: "acc_1",
+            email: "one@gmail.com",
+            displayName: "Account One",
+            refreshToken: "rt_1",
+            isPrimaryCatalogHost: true,
+            quotaLimitBytes: 15 * gb,
+            quotaUsedBytes: 1 * gb,
+            heliumUsedBytes: 0,
+            rootFolderId: "vault_1"
+        )
+        let pool = GoogleAccountPool(accounts: [acc], transport: mockCloud)
+        let pooledRemote = PooledGoogleDriveRemote(pool: pool)
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("grace_test_\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        try Data("Grace window payload".utf8).write(to: tempURL)
+
+        let uploaded = try await pooledRemote.uploadNewFile(
+            from: tempURL,
+            name: "grace.txt",
+            parentId: RemoteItem.rootID,
+            clientId: UUID().uuidString,
+            modifiedAt: Date(),
+            link: false,
+            progress: nil
+        )
+        _ = await pooledRemote.moveToTrash(id: uploaded.id)
+        let restored = await pooledRemote.restoreFromTrash(id: uploaded.id)
+        XCTAssertEqual(restored?.item.deleted, false)
+
+        let restoreCompletedAt = Date()
+        let skipInsideWindow = await pooledRemote.shouldSkipRecycleBinSync(
+            for: uploaded.id,
+            now: restoreCompletedAt.addingTimeInterval(60)
+        )
+        XCTAssertTrue(skipInsideWindow)
+
+        let skipUnrelated = await pooledRemote.shouldSkipRecycleBinSync(
+            for: "unrelated_item_id",
+            now: restoreCompletedAt.addingTimeInterval(60)
+        )
+        XCTAssertFalse(skipUnrelated)
+
+        let skipAfterWindow = await pooledRemote.shouldSkipRecycleBinSync(
+            for: uploaded.id,
+            now: restoreCompletedAt.addingTimeInterval(121)
+        )
+        XCTAssertFalse(skipAfterWindow)
+    }
+
+    func testParseDriveFileListPageHandlesPaginationAndThrowsOnInvalidJSON() throws {
+        let page1JSON = """
+        {
+          "nextPageToken": "tok_page_2",
+          "files": [
+            {"id": "f1", "name": "alpha.mov", "mimeType": "video/quicktime", "size": "1024"},
+            {"id": "f2", "name": "Subfolder", "mimeType": "application/vnd.google-apps.folder"}
+          ]
+        }
+        """
+        let page1 = try URLSessionGoogleDriveTransport.parseDriveFileListPage(from: Data(page1JSON.utf8))
+        XCTAssertEqual(page1.nextPageToken, "tok_page_2")
+        XCTAssertEqual(page1.files.count, 2)
+        XCTAssertEqual(page1.files[0].size, 1024)
+        XCTAssertEqual(page1.files[1].mimeType, "application/vnd.google-apps.folder")
+
+        let page2JSON = """
+        {
+          "files": [
+            {"id": "f3", "name": "omega.pdf", "mimeType": "application/pdf", "size": "2048"}
+          ]
+        }
+        """
+        let page2 = try URLSessionGoogleDriveTransport.parseDriveFileListPage(from: Data(page2JSON.utf8))
+        XCTAssertNil(page2.nextPageToken)
+        XCTAssertEqual(page2.files.map(\.id), ["f3"])
+
+        XCTAssertThrowsError(try URLSessionGoogleDriveTransport.parseDriveFileListPage(from: Data("not-json".utf8)))
+        XCTAssertThrowsError(try URLSessionGoogleDriveTransport.parseDriveFileListPage(from: Data("{\"unexpected\":true}".utf8)))
+    }
+
+    func testShouldAbortMassDeleteThresholds() {
+        XCTAssertFalse(PooledGoogleDriveRemote.shouldAbortMassDelete(candidateCount: 0, totalActiveCount: 0))
+        XCTAssertFalse(PooledGoogleDriveRemote.shouldAbortMassDelete(candidateCount: 2, totalActiveCount: 10))
+        XCTAssertTrue(PooledGoogleDriveRemote.shouldAbortMassDelete(candidateCount: 3, totalActiveCount: 10))
+        XCTAssertFalse(PooledGoogleDriveRemote.shouldAbortMassDelete(candidateCount: 10, totalActiveCount: 100))
+        XCTAssertTrue(PooledGoogleDriveRemote.shouldAbortMassDelete(candidateCount: 11, totalActiveCount: 100))
+        XCTAssertTrue(PooledGoogleDriveRemote.shouldAbortMassDelete(candidateCount: 1, totalActiveCount: 1))
+    }
+
+    func testRestoreWithHierarchyRestoresFolderChildrenAndParentChain() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        let manifestURL = tempDir.appendingPathComponent("pool-manifests.json")
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+
+        let parentFolder = PoolItemManifest(
+            item: RemoteItem(
+                id: "folder_parent",
+                parentId: RemoteItem.rootID,
+                name: "Projects",
+                kind: .folder,
+                size: 0,
+                contentVersion: 1,
+                metadataVersion: 1,
+                createdAt: nowMs - 500_000,
+                modifiedAt: nowMs,
+                deleted: true
+            ),
+            placementMode: .wholeFileSmartPlacement,
+            segments: []
+        )
+        let childFolder = PoolItemManifest(
+            item: RemoteItem(
+                id: "folder_child",
+                parentId: "folder_parent",
+                name: "2026",
+                kind: .folder,
+                size: 0,
+                contentVersion: 1,
+                metadataVersion: 2,
+                createdAt: nowMs - 500_000,
+                modifiedAt: nowMs + 500,
+                deleted: true
+            ),
+            placementMode: .wholeFileSmartPlacement,
+            segments: []
+        )
+        let grandChildFile = PoolItemManifest(
+            item: RemoteItem(
+                id: "file_grandchild",
+                parentId: "folder_child",
+                name: "cut.mov",
+                kind: .file,
+                size: 512,
+                contentVersion: 1,
+                metadataVersion: 3,
+                createdAt: nowMs - 500_000,
+                modifiedAt: nowMs + 900,
+                deleted: true
+            ),
+            placementMode: .wholeFileSmartPlacement,
+            segments: [
+                PoolSegment(index: 0, accountId: "acc_1", driveFileId: "gdrive_acc_1_cut", logicalOffset: 0, byteLength: 512, sha256: "")
+            ]
+        )
+        let olderTrashedChild = PoolItemManifest(
+            item: RemoteItem(
+                id: "file_older_trash",
+                parentId: "folder_parent",
+                name: "old_draft.txt",
+                kind: .file,
+                size: 128,
+                contentVersion: 1,
+                metadataVersion: 4,
+                createdAt: nowMs - 500_000,
+                modifiedAt: nowMs - 120_000,
+                deleted: true
+            ),
+            placementMode: .wholeFileSmartPlacement,
+            segments: [
+                PoolSegment(index: 0, accountId: "acc_1", driveFileId: "gdrive_acc_1_old", logicalOffset: 0, byteLength: 128, sha256: "")
+            ]
+        )
+
+        let encoded = try JSONEncoder().encode([
+            parentFolder.item.id: parentFolder,
+            childFolder.item.id: childFolder,
+            grandChildFile.item.id: grandChildFile,
+            olderTrashedChild.item.id: olderTrashedChild
+        ])
+        try encoded.write(to: manifestURL, options: .atomic)
+
+        let acc = LinkedGoogleAccount(
+            id: "acc_1",
+            email: "one@gmail.com",
+            displayName: "Account One",
+            refreshToken: "rt_1",
+            isPrimaryCatalogHost: true,
+            quotaLimitBytes: 15 * 1024 * 1024 * 1024,
+            quotaUsedBytes: 0,
+            heliumUsedBytes: 0,
+            rootFolderId: "vault_1"
+        )
+        let pool = GoogleAccountPool(accounts: [acc], transport: MockGoogleDriveCloud())
+        let pooledRemote = PooledGoogleDriveRemote(pool: pool, manifestsPersistenceURL: manifestURL)
+
+        // 1. Restoring folder restores co-trashed children (within 60s), leaving older trashed child in the bin
+        let restoredFromFolder = await pooledRemote.restoreWithHierarchy(id: "folder_parent")
+        XCTAssertEqual(Set(restoredFromFolder.map(\.item.id)), ["folder_parent", "folder_child", "file_grandchild"])
+        let olderAfterFolderRestore = try await pooledRemote.manifest(for: "file_older_trash")
+        XCTAssertTrue(olderAfterFolderRestore.item.deleted)
+
+        // 2. Trash parent + grandchild again, then restore only grandchild: parent chain must be restored first
+        _ = await pooledRemote.moveToTrash(id: "folder_parent")
+        _ = await pooledRemote.moveToTrash(id: "folder_child")
+        _ = await pooledRemote.moveToTrash(id: "file_grandchild")
+        let restoredFromLeaf = await pooledRemote.restoreWithHierarchy(id: "file_grandchild")
+        XCTAssertEqual(restoredFromLeaf.map(\.item.id), ["folder_parent", "folder_child", "file_grandchild"])
+        let leafAfter = try await pooledRemote.manifest(for: "file_grandchild")
+        XCTAssertFalse(leafAfter.item.deleted)
+        XCTAssertEqual(leafAfter.item.parentId, "folder_child")
+    }
+
+    func testUnresolvedMissingIdsForDeletionSkipsDescendantsOfMovedFolders() {
+        let parentById: [String: String?] = [
+            "folder_a": RemoteItem.rootID,
+            "folder_b": "folder_a",
+            "file_in_b": "folder_b",
+            "file_in_a": "folder_a",
+            "unrelated_file": RemoteItem.rootID,
+            "moved_root_file": RemoteItem.rootID
+        ]
+        let missing = ["folder_a", "folder_b", "file_in_b", "file_in_a", "moved_root_file", "unrelated_file"]
+        let unresolved = PooledGoogleDriveRemote.unresolvedMissingIdsForDeletion(
+            missingItemIds: missing,
+            movedItemIds: ["folder_a", "moved_root_file"],
+            movedFolderIds: ["folder_a"],
+            parentById: parentById
+        )
+        XCTAssertEqual(unresolved, ["unrelated_file"])
+    }
+
+    func testMoveToTrashMatchesExactCanonicalCaseAndPreservesDifferentCase() async throws {
+        let mockCloud = MockGoogleDriveCloud()
+        let gb: Int64 = 1024 * 1024 * 1024
+        let acc = LinkedGoogleAccount(
+            id: "acc_1",
+            email: "one@gmail.com",
+            displayName: "Account One",
+            refreshToken: "rt_1",
+            isPrimaryCatalogHost: true,
+            quotaLimitBytes: 15 * gb,
+            quotaUsedBytes: 0,
+            heliumUsedBytes: 0,
+            rootFolderId: "vault_1"
+        )
+        let pool = GoogleAccountPool(accounts: [acc], transport: mockCloud)
+        let pooledRemote = PooledGoogleDriveRemote(pool: pool)
+
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        let upper1 = tempDir.appendingPathComponent("upper1.pdf")
+        let upper2 = tempDir.appendingPathComponent("upper2.pdf")
+        let lower = tempDir.appendingPathComponent("lower.pdf")
+        try Data("Upper 1".utf8).write(to: upper1)
+        try Data("Upper 2".utf8).write(to: upper2)
+        try Data("Lower".utf8).write(to: lower)
+
+        let itemUpper1 = try await pooledRemote.uploadNewFile(
+            from: upper1, name: "Report.pdf", parentId: RemoteItem.rootID,
+            clientId: UUID().uuidString, modifiedAt: Date(), link: false, progress: nil
+        )
+        let itemUpper2 = try await pooledRemote.uploadNewFile(
+            from: upper2, name: "Report.pdf", parentId: RemoteItem.rootID,
+            clientId: UUID().uuidString, modifiedAt: Date(), link: false, progress: nil
+        )
+        let itemLower = try await pooledRemote.uploadNewFile(
+            from: lower, name: "report.pdf", parentId: RemoteItem.rootID,
+            clientId: UUID().uuidString, modifiedAt: Date(), link: false, progress: nil
+        )
+
+        _ = await pooledRemote.moveToTrash(id: itemUpper1.id)
+
+        let upper1After = try await pooledRemote.manifest(for: itemUpper1.id)
+        let upper2After = try await pooledRemote.manifest(for: itemUpper2.id)
+        let lowerAfter = try await pooledRemote.manifest(for: itemLower.id)
+        XCTAssertTrue(upper1After.item.deleted)
+        XCTAssertTrue(upper2After.item.deleted)
+        XCTAssertFalse(lowerAfter.item.deleted)
+    }
+
+    func testReplaceBlobFailurePreservesOldContentAndManifest() async throws {
+        actor FailingPutMockTransport: GoogleDriveTransport {
+            let inner = MockGoogleDriveCloud()
+            var failPutAfterCount: Int?
+            var putCount = 0
+
+            func setFailPutAfterCount(_ count: Int?) {
+                failPutAfterCount = count
+            }
+
+            func putSegment(account: LinkedGoogleAccount, name: String, parentFolderId: String, data: Data) async throws -> String {
+                putCount += 1
+                if let limit = failPutAfterCount, putCount > limit {
+                    throw GoogleDriveTransportError.httpError(statusCode: 500, message: "Injected upload failure")
+                }
+                return try await inner.putSegment(account: account, name: name, parentFolderId: parentFolderId, data: data)
+            }
+
+            func fetchSegmentRange(account: LinkedGoogleAccount, driveFileId: String, offset: Int64, length: Int) async throws -> Data {
+                try await inner.fetchSegmentRange(account: account, driveFileId: driveFileId, offset: offset, length: length)
+            }
+
+            func deleteSegment(account: LinkedGoogleAccount, driveFileId: String) async throws {
+                try await inner.deleteSegment(account: account, driveFileId: driveFileId)
+            }
+
+            func fetchQuota(account: LinkedGoogleAccount) async throws -> (limit: Int64, used: Int64) {
+                try await inner.fetchQuota(account: account)
+            }
+        }
+
+        let transport = FailingPutMockTransport()
+        let mib: Int64 = 1_048_576
+        // 3 MiB quota with 0 reserve; initial 2 MiB file leaves 1 MiB free so replacement also exercises reclaimable quota accounting.
+        let acc = LinkedGoogleAccount(
+            id: "acc_1",
+            email: "one@gmail.com",
+            displayName: "Account One",
+            refreshToken: "rt_1",
+            isPrimaryCatalogHost: true,
+            quotaLimitBytes: 3 * mib,
+            quotaUsedBytes: 0,
+            heliumUsedBytes: 0,
+            rootFolderId: "vault_1"
+        )
+        let pool = GoogleAccountPool(accounts: [acc], transport: transport)
+        let allocator = StoragePoolAllocator(safetyReserveBytes: 0, segmentChunkCount: 1, autoStripeAboveBytes: 1 * mib)
+        let pooledRemote = PooledGoogleDriveRemote(pool: pool, allocator: allocator)
+
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        let originalData = Data(repeating: 0xAA, count: Int(2 * mib))
+        let originalURL = tempDir.appendingPathComponent("video.bin")
+        try originalData.write(to: originalURL)
+
+        let uploaded = try await pooledRemote.uploadNewFile(
+            from: originalURL, name: "video.bin", parentId: RemoteItem.rootID,
+            clientId: UUID().uuidString, modifiedAt: Date(), link: false, progress: nil
+        )
+        let originalManifest = try await pooledRemote.manifest(for: uploaded.id)
+
+        // Allow 1st segment of replacement (put #3) to upload, fail on 2nd segment (put #4)
+        await transport.setFailPutAfterCount(3)
+
+        let replacementData = Data(repeating: 0xBB, count: Int(2 * mib))
+        let replacementURL = tempDir.appendingPathComponent("video_new.bin")
+        try replacementData.write(to: replacementURL)
+
+        do {
+            _ = try await pooledRemote.uploadOverwrite(
+                id: uploaded.id,
+                from: replacementURL,
+                expectedVersion: originalManifest.item.contentVersion,
+                modifiedAt: Date(),
+                progress: nil
+            )
+            XCTFail("Expected uploadOverwrite to throw when replacement segment upload fails")
+        } catch {
+            // Expected
+        }
+
+        let afterManifest = try await pooledRemote.manifest(for: uploaded.id)
+        XCTAssertEqual(afterManifest, originalManifest, "Manifest must stay unchanged when replacement fails")
+
+        let readBack = try await pooledRemote.fetchRange(id: uploaded.id, offset: 0, length: originalData.count)
+        XCTAssertEqual(readBack, originalData, "Original content must remain readable after failed replacement")
+    }
+
+    func testClassifyLocalHydratedFileThreeWayBaselineAndNoBaselineCases() throws {
+        let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let baseline = LocalSyncBaseline(
+            contentVersion: 3,
+            localSize: 1024,
+            localModifiedAt: baseDate.timeIntervalSince1970
+        )
+
+        // 1. Baseline exists: not local, not cloud -> .unchanged (within 0.001s mtime tolerance)
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                localSize: 1024,
+                localModifiedAt: baseDate.addingTimeInterval(0.0005),
+                cloudSize: 1024,
+                cloudContentVersion: 3,
+                baseline: baseline
+            ),
+            .unchanged
+        )
+
+        // 1b. Baseline exists: 0.5s mtime drift with identical size exceeds 0.001s -> .overwriteCloud
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                localSize: 1024,
+                localModifiedAt: baseDate.addingTimeInterval(0.5),
+                cloudSize: 1024,
+                cloudContentVersion: 3,
+                baseline: baseline
+            ),
+            .overwriteCloud
+        )
+
+        // 2. Baseline exists: local only changed -> .overwriteCloud
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                localSize: 2048,
+                localModifiedAt: baseDate.addingTimeInterval(5.0),
+                cloudSize: 1024,
+                cloudContentVersion: 3,
+                baseline: baseline
+            ),
+            .overwriteCloud
+        )
+
+        // 3. Baseline exists: cloud only changed -> .refreshFromCloud
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                localSize: 1024,
+                localModifiedAt: baseDate,
+                cloudSize: 4096,
+                cloudContentVersion: 4,
+                baseline: baseline
+            ),
+            .refreshFromCloud
+        )
+
+        // 4. Baseline exists: both local and cloud changed -> .conflict
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                localSize: 2048,
+                localModifiedAt: baseDate.addingTimeInterval(5.0),
+                cloudSize: 4096,
+                cloudContentVersion: 4,
+                baseline: baseline
+            ),
+            .conflict
+        )
+
+        // 5. No baseline: local size and SHA-256 match cloud -> .unchanged
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let payload = Data("Helium sync baseline payload".utf8)
+        let localFileURL = tempDir.appendingPathComponent("sample.bin")
+        try payload.write(to: localFileURL)
+        let localHash = PooledGoogleDriveRemote.computeFileSHA256ZKBase64(at: localFileURL)
+
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                localSize: Int64(payload.count),
+                localModifiedAt: Date(),
+                localSHA256Base64: localHash,
+                cloudSize: Int64(payload.count),
+                cloudContentVersion: 2,
+                cloudSHA256Base64: localHash,
+                baseline: nil
+            ),
+            .unchanged
+        )
+
+        // 6. No baseline: size or hash mismatch -> .conflict
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                localSize: Int64(payload.count),
+                localModifiedAt: Date(),
+                localSHA256Base64: localHash,
+                cloudSize: Int64(payload.count),
+                cloudContentVersion: 2,
+                cloudSHA256Base64: "different_hash",
+                baseline: nil
+            ),
+            .conflict
+        )
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                localSize: Int64(payload.count + 10),
+                localModifiedAt: Date(),
+                localSHA256Base64: localHash,
+                cloudSize: Int64(payload.count),
+                cloudContentVersion: 2,
+                cloudSHA256Base64: localHash,
+                baseline: nil
+            ),
+            .conflict
+        )
+    }
+
+    func testLocalSyncBaselineStoreRoundTripAndRemove() {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let storeURL = tempDir.appendingPathComponent("local-sync-baselines.json")
+
+        let writer = LocalSyncBaselineStore(fileURL: storeURL)
+        let entry = LocalSyncBaseline(contentVersion: 5, localSize: 4096, localModifiedAt: 1_700_000_123.5)
+        writer.setBaseline(entry, for: "item_1")
+
+        let reader = LocalSyncBaselineStore(fileURL: storeURL)
+        XCTAssertEqual(reader.baseline(for: "item_1"), entry)
+
+        reader.removeBaseline(for: "item_1")
+        let readerAfterRemove = LocalSyncBaselineStore(fileURL: storeURL)
+        XCTAssertNil(readerAfterRemove.baseline(for: "item_1"))
+    }
+
+    func testIsCloudContentEditedDetectsChecksumAndSizeChanges() {
+        // Matching MD5 and matching size -> not edited
+        XCTAssertFalse(
+            PooledGoogleDriveRemote.isCloudContentEdited(
+                storedMD5: "abc123",
+                storedSize: 1024,
+                listedMD5: "abc123",
+                listedSize: 1024
+            )
+        )
+        // Different MD5 with identical byte size -> edited (same-size Drive Web replace)
+        XCTAssertTrue(
+            PooledGoogleDriveRemote.isCloudContentEdited(
+                storedMD5: "abc123",
+                storedSize: 1024,
+                listedMD5: "def456",
+                listedSize: 1024
+            )
+        )
+        // Missing stored MD5 and matching size -> not edited (first listing backfills MD5)
+        XCTAssertFalse(
+            PooledGoogleDriveRemote.isCloudContentEdited(
+                storedMD5: nil,
+                storedSize: 1024,
+                listedMD5: "abc123",
+                listedSize: 1024
+            )
+        )
+        // Different listed size (> 0), even without stored MD5 -> edited
+        XCTAssertTrue(
+            PooledGoogleDriveRemote.isCloudContentEdited(
+                storedMD5: nil,
+                storedSize: 1024,
+                listedMD5: "abc123",
+                listedSize: 2048
+            )
+        )
+        // Different listed size (> 0) with missing listed MD5 -> edited
+        XCTAssertTrue(
+            PooledGoogleDriveRemote.isCloudContentEdited(
+                storedMD5: "abc123",
+                storedSize: 1024,
+                listedMD5: nil,
+                listedSize: 512
+            )
+        )
+    }
+
+    func testLegacyManifestJSONDecodesWithoutMD5Checksum() throws {
+        let legacyJSON = """
+        {
+          "pool_file_legacy": {
+            "item": {
+              "id": "pool_file_legacy",
+              "name": "legacy.txt",
+              "nameLocked": false,
+              "kind": "file",
+              "size": 128,
+              "contentVersion": 1,
+              "metadataVersion": 1,
+              "createdAt": 1700000000000,
+              "modifiedAt": 1700000000000,
+              "deleted": false,
+              "shared": false
+            },
+            "placementMode": "whole_file",
+            "segments": [
+              {
+                "index": 0,
+                "accountId": "acc_1",
+                "driveFileId": "drive_legacy_1",
+                "logicalOffset": 0,
+                "byteLength": 128,
+                "sha256": "abc"
+              }
+            ]
+          }
+        }
+        """
+        let decoded = try JSONDecoder().decode(
+            [String: PoolItemManifest].self,
+            from: Data(legacyJSON.utf8)
+        )
+        let manifest = try XCTUnwrap(decoded["pool_file_legacy"])
+        XCTAssertEqual(manifest.segments.count, 1)
+        XCTAssertNil(manifest.segments[0].md5Checksum)
+        XCTAssertEqual(manifest.segments[0].byteLength, 128)
+    }
+
+    func testParseDriveFileListPageReadsMD5AndModifiedTime() throws {
+        let pageJSON = """
+        {
+          "files": [
+            {
+              "id": "drive_1",
+              "name": "doc.txt",
+              "mimeType": "text/plain",
+              "size": "42",
+              "md5Checksum": "9e107d9d372bb6826bd81d3542a419d6",
+              "modifiedTime": "2026-11-26T09:15:30.123Z"
+            }
+          ]
+        }
+        """
+        let parsed = try URLSessionGoogleDriveTransport.parseDriveFileListPage(from: Data(pageJSON.utf8))
+        XCTAssertEqual(parsed.files.count, 1)
+        XCTAssertEqual(parsed.files[0].id, "drive_1")
+        XCTAssertEqual(parsed.files[0].size, 42)
+        XCTAssertEqual(parsed.files[0].md5Checksum, "9e107d9d372bb6826bd81d3542a419d6")
+        XCTAssertEqual(parsed.files[0].modifiedTime, "2026-11-26T09:15:30.123Z")
+    }
+
+    func testDecideBeforeOverwriteCoversAllCloudPrecheckCases() {
+        // 1. Same md5Checksum and size -> overwrite
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.decideBeforeOverwrite(
+                storedMD5: "abc123",
+                storedSize: 1024,
+                fetchResult: .found(GoogleDriveLiveFileMetadata(md5Checksum: "abc123", size: 1024, trashed: false))
+            ),
+            .overwrite
+        )
+
+        // 2. MD5 differs (even with same size) -> conflict with cloud refresh
+        let md5Diff = PooledGoogleDriveRemote.decideBeforeOverwrite(
+            storedMD5: "abc123",
+            storedSize: 1024,
+            fetchResult: .found(GoogleDriveLiveFileMetadata(md5Checksum: "def456", size: 1024, trashed: false))
+        )
+        XCTAssertEqual(md5Diff, .conflictRefreshFromCloud)
+        XCTAssertTrue(md5Diff.isConflict)
+
+        // 3. Size differs -> conflict with cloud refresh
+        let sizeDiff = PooledGoogleDriveRemote.decideBeforeOverwrite(
+            storedMD5: "abc123",
+            storedSize: 1024,
+            fetchResult: .found(GoogleDriveLiveFileMetadata(md5Checksum: "abc123", size: 2048, trashed: false))
+        )
+        XCTAssertEqual(sizeDiff, .conflictRefreshFromCloud)
+        XCTAssertTrue(sizeDiff.isConflict)
+
+        // 4a. Missing (404) -> conflict leaving original as-is
+        let missing = PooledGoogleDriveRemote.decideBeforeOverwrite(
+            storedMD5: "abc123",
+            storedSize: 1024,
+            fetchResult: .missingOrTrashed
+        )
+        XCTAssertEqual(missing, .conflictLeaveOriginal)
+        XCTAssertTrue(missing.isConflict)
+
+        // 4b. Explicitly trashed -> conflict leaving original as-is
+        let trashed = PooledGoogleDriveRemote.decideBeforeOverwrite(
+            storedMD5: "abc123",
+            storedSize: 1024,
+            fetchResult: .found(GoogleDriveLiveFileMetadata(md5Checksum: "abc123", size: 1024, trashed: true))
+        )
+        XCTAssertEqual(trashed, .conflictLeaveOriginal)
+        XCTAssertTrue(trashed.isConflict)
+
+        // 5. Fetch failed (network / 5xx) -> skip overwrite this round
+        XCTAssertEqual(
+            PooledGoogleDriveRemote.decideBeforeOverwrite(
+                storedMD5: "abc123",
+                storedSize: 1024,
+                fetchResult: .failed
+            ),
+            .skip
+        )
+    }
+
+    func testParseDriveLiveFileMetadataResponseHandlesActiveTrashedMissingAndErrors() throws {
+        let activeJSON = Data(#"{"md5Checksum":"deadbeef","size":"512","trashed":false}"#.utf8)
+        let active = try URLSessionGoogleDriveTransport.parseDriveLiveFileMetadataResponse(data: activeJSON, statusCode: 200)
+        XCTAssertEqual(active, .found(GoogleDriveLiveFileMetadata(md5Checksum: "deadbeef", size: 512, trashed: false)))
+
+        let trashedJSON = Data(#"{"md5Checksum":"deadbeef","size":"512","trashed":true}"#.utf8)
+        let trashed = try URLSessionGoogleDriveTransport.parseDriveLiveFileMetadataResponse(data: trashedJSON, statusCode: 200)
+        XCTAssertEqual(trashed, .missingOrTrashed)
+
+        let notFound = try URLSessionGoogleDriveTransport.parseDriveLiveFileMetadataResponse(data: Data(), statusCode: 404)
+        XCTAssertEqual(notFound, .missingOrTrashed)
+
+        let serverErr = try URLSessionGoogleDriveTransport.parseDriveLiveFileMetadataResponse(data: Data(), statusCode: 503)
+        XCTAssertEqual(serverErr, .failed)
+
+        XCTAssertThrowsError(
+            try URLSessionGoogleDriveTransport.parseDriveLiveFileMetadataResponse(data: Data(), statusCode: 401)
+        )
+    }
+
+    func testReplaceBlobStaleExpectedVersionThrowsWithoutUploadingOrMutating() async throws {
+        actor CountingMockTransport: GoogleDriveTransport {
+            let inner = MockGoogleDriveCloud()
+            var putCount = 0
+            var deleteCount = 0
+
+            func resetCounts() {
+                putCount = 0
+                deleteCount = 0
+            }
+
+            func putSegment(account: LinkedGoogleAccount, name: String, parentFolderId: String, data: Data) async throws -> String {
+                putCount += 1
+                return try await inner.putSegment(account: account, name: name, parentFolderId: parentFolderId, data: data)
+            }
+
+            func fetchSegmentRange(account: LinkedGoogleAccount, driveFileId: String, offset: Int64, length: Int) async throws -> Data {
+                try await inner.fetchSegmentRange(account: account, driveFileId: driveFileId, offset: offset, length: length)
+            }
+
+            func deleteSegment(account: LinkedGoogleAccount, driveFileId: String) async throws {
+                deleteCount += 1
+                try await inner.deleteSegment(account: account, driveFileId: driveFileId)
+            }
+
+            func fetchQuota(account: LinkedGoogleAccount) async throws -> (limit: Int64, used: Int64) {
+                try await inner.fetchQuota(account: account)
+            }
+        }
+
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let transport = CountingMockTransport()
+        let acc = LinkedGoogleAccount(
+            id: "acc_1",
+            email: "one@gmail.com",
+            displayName: "Account One",
+            refreshToken: "rt_1",
+            isPrimaryCatalogHost: true,
+            quotaLimitBytes: 1024 * 1_048_576,
+            quotaUsedBytes: 0,
+            heliumUsedBytes: 0,
+            rootFolderId: "vault_1"
+        )
+        let pool = GoogleAccountPool(accounts: [acc], transport: transport, secretStore: MemorySecretStore())
+        let remote = PooledGoogleDriveRemote(pool: pool)
+
+        let v1Payload = Data("version-one".utf8)
+        let v1URL = tempDir.appendingPathComponent("v1.txt")
+        try v1Payload.write(to: v1URL)
+        let saved = try await remote.putBlob(
+            source: try FileBlobSource(v1URL),
+            plainSize: Int64(v1Payload.count),
+            secrets: nil,
+            name: .plain("notes.txt"),
+            parentId: RemoteItem.rootID,
+            clientId: UUID().uuidString,
+            modifiedAt: Date(),
+            link: false,
+            progress: nil
+        )
+        XCTAssertEqual(saved.item.contentVersion, 1)
+
+        // Advance cloud to v2 with a valid matching expectedVersion
+        let v2Payload = Data("version-two".utf8)
+        let v2URL = tempDir.appendingPathComponent("v2.txt")
+        try v2Payload.write(to: v2URL)
+        let updatedV2 = try await remote.replaceBlob(
+            id: saved.item.id,
+            source: try FileBlobSource(v2URL),
+            plainSize: Int64(v2Payload.count),
+            secrets: nil,
+            expectedVersion: 1,
+            modifiedAt: Date(),
+            progress: nil
+        )
+        XCTAssertEqual(updatedV2.contentVersion, 2)
+
+        let manifestBeforeStale = try await remote.manifest(for: saved.item.id)
+        await transport.resetCounts()
+
+        // Attempt overwrite with stale expectedVersion: 1
+        let stalePayload = Data("stale-local-overwrite".utf8)
+        let staleURL = tempDir.appendingPathComponent("stale.txt")
+        try stalePayload.write(to: staleURL)
+        do {
+            _ = try await remote.replaceBlob(
+                id: saved.item.id,
+                source: try FileBlobSource(staleURL),
+                plainSize: Int64(stalePayload.count),
+                secrets: nil,
+                expectedVersion: 1,
+                modifiedAt: Date(),
+                progress: nil
+            )
+            XCTFail("Expected PoolConflictError.versionMismatch when expectedVersion is stale")
+        } catch let error as PoolConflictError {
+            XCTAssertEqual(error, .versionMismatch(expected: 1, actual: 2))
+        }
+
+        let putsAfterStale = await transport.putCount
+        let deletesAfterStale = await transport.deleteCount
+        XCTAssertEqual(putsAfterStale, 0)
+        XCTAssertEqual(deletesAfterStale, 0)
+
+        let manifestAfterStale = try await remote.manifest(for: saved.item.id)
+        XCTAssertEqual(manifestAfterStale, manifestBeforeStale)
+        let fetchedData = try await remote.fetchRange(id: saved.item.id, offset: 0, length: v2Payload.count)
+        XCTAssertEqual(fetchedData, v2Payload)
+    }
+
+    func testOrbitDriveFlushFileSavesConflictCopyAndPreservesStagingOnVersionMismatch() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let acc = LinkedGoogleAccount(
+            id: "acc_1",
+            email: "one@gmail.com",
+            displayName: "Account One",
+            refreshToken: "rt_1",
+            isPrimaryCatalogHost: true,
+            quotaLimitBytes: 1024 * 1_048_576,
+            quotaUsedBytes: 0,
+            heliumUsedBytes: 0,
+            rootFolderId: "vault_1"
+        )
+        let pool = GoogleAccountPool(accounts: [acc], transport: MockGoogleDriveCloud(), secretStore: MemorySecretStore())
+        let remote = PooledGoogleDriveRemote(pool: pool)
+
+        let v1Data = Data("cloud-v1".utf8)
+        let v1URL = tempDir.appendingPathComponent("doc_v1.txt")
+        try v1Data.write(to: v1URL)
+        let saved = try await remote.putBlob(
+            source: try FileBlobSource(v1URL),
+            plainSize: Int64(v1Data.count),
+            secrets: nil,
+            name: .plain("doc.txt"),
+            parentId: RemoteItem.rootID,
+            clientId: UUID().uuidString,
+            modifiedAt: Date(),
+            link: false,
+            progress: nil
+        )
+
+        let drive = OrbitDrive(
+            remote: remote,
+            configuration: OrbitDrive.Configuration(
+                directory: tempDir.appendingPathComponent("orbit"),
+                deviceName: "TestMac",
+                cacheLimits: ChunkStore.Limits.defaults(diskCapacity: 50_000_000_000)
+            )
+        )
+        try await drive.sync()
+
+        guard let node = drive.lookup("doc.txt", in: DriveNode.rootID) else {
+            return XCTFail("Expected doc.txt in OrbitDrive tree")
+        }
+        XCTAssertEqual(node.contentVersion, 1)
+
+        // Stage a local edit in OrbitDrive while based on v1
+        let localEditData = Data("local-dirty-edit".utf8)
+        try drive.write(node.id, offset: 0, data: localEditData)
+
+        // Advance cloud to v2 externally, then run sync() to ensure dirtyContent preserves local base version 1
+        let v2Data = Data("cloud-v2-newer".utf8)
+        let v2URL = tempDir.appendingPathComponent("doc_v2.txt")
+        try v2Data.write(to: v2URL)
+        _ = try await remote.replaceBlob(
+            id: saved.item.id,
+            source: try FileBlobSource(v2URL),
+            plainSize: Int64(v2Data.count),
+            secrets: nil,
+            expectedVersion: 1,
+            modifiedAt: Date(),
+            progress: nil
+        )
+        try await drive.sync()
+        XCTAssertEqual(drive.node(node.id)?.contentVersion, 1)
+
+        // Flushing should detect versionMismatch, keep the staging file, and save a Conflict copy
+        _ = try await drive.flushFile(node.id)
+
+        XCTAssertTrue(drive.staging.exists(node.id))
+        let stagedReadback = try drive.staging.read(node.id, offset: 0, length: localEditData.count)
+        XCTAssertEqual(stagedReadback, localEditData)
+
+        let originalManifest = try await remote.manifest(for: saved.item.id)
+        XCTAssertEqual(originalManifest.item.contentVersion, 2)
+        let originalCloudData = try await remote.fetchRange(id: saved.item.id, offset: 0, length: v2Data.count)
+        XCTAssertEqual(originalCloudData, v2Data)
+
+        let allManifests = await remote.allManifests()
+        let conflictManifest = allManifests.first { m in
+            m.item.id != saved.item.id && m.item.name.hasPrefix("doc (Conflict copy ") && m.item.name.hasSuffix(").txt")
+        }
+        let conflictItem = try XCTUnwrap(conflictManifest)
+        let conflictCloudData = try await remote.fetchRange(id: conflictItem.item.id, offset: 0, length: localEditData.count)
+        XCTAssertEqual(conflictCloudData, localEditData)
+    }
 }

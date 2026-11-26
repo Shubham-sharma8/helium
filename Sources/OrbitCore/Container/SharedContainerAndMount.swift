@@ -89,6 +89,84 @@ public final class KeepList: @unchecked Sendable {
     }
 }
 
+/// Sync baseline recorded when Helium writes hydrated bytes for a cloud manifest to `/Volumes/Helium` or `~/Helium`.
+public struct LocalSyncBaseline: Codable, Equatable, Sendable {
+    public let contentVersion: Int64
+    public let localSize: Int64
+    public let localModifiedAt: Double
+
+    public init(contentVersion: Int64, localSize: Int64, localModifiedAt: Double) {
+        self.contentVersion = contentVersion
+        self.localSize = localSize
+        self.localModifiedAt = localModifiedAt
+    }
+}
+
+/// Atomic JSON store (`local-sync-baselines.json` in `SharedContainer.directoryURL()`) keyed by manifest ID.
+public final class LocalSyncBaselineStore: @unchecked Sendable {
+    public static let shared = LocalSyncBaselineStore()
+
+    private let fileURL: URL
+    private let lock = NSLock()
+    private var baselines: [String: LocalSyncBaseline] = [:]
+
+    public init(fileURL: URL = SharedContainer.directoryURL().appendingPathComponent("local-sync-baselines.json")) {
+        self.fileURL = fileURL
+        if let data = try? Data(contentsOf: fileURL),
+           let loaded = try? JSONDecoder().decode([String: LocalSyncBaseline].self, from: data) {
+            self.baselines = loaded
+        }
+    }
+
+    public func baseline(for manifestId: String) -> LocalSyncBaseline? {
+        lock.lock()
+        defer { lock.unlock() }
+        return baselines[manifestId]
+    }
+
+    public func setBaseline(_ baseline: LocalSyncBaseline, for manifestId: String) {
+        lock.lock()
+        baselines[manifestId] = baseline
+        let snapshot = baselines
+        lock.unlock()
+        persist(snapshot)
+    }
+
+    public func recordFile(at fileURL: URL, manifestId: String, contentVersion: Int64) {
+        guard let vals = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+              let size = vals.fileSize,
+              let modDate = vals.contentModificationDate else {
+            return
+        }
+        setBaseline(
+            LocalSyncBaseline(
+                contentVersion: contentVersion,
+                localSize: Int64(size),
+                localModifiedAt: modDate.timeIntervalSince1970
+            ),
+            for: manifestId
+        )
+    }
+
+    public func removeBaseline(for manifestId: String) {
+        lock.lock()
+        let removed = baselines.removeValue(forKey: manifestId)
+        let snapshot = baselines
+        lock.unlock()
+        if removed != nil {
+            persist(snapshot)
+        }
+    }
+
+    private func persist(_ snapshot: [String: LocalSyncBaseline]) {
+        let dir = fileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(snapshot) {
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
+}
+
 /// XPC protocol exported by `OrbitMountHelper` for mounting and unmounting the FSKit volume at `/Volumes/Helium`.
 @objc(MountHelperProtocol)
 public protocol MountHelperProtocol {

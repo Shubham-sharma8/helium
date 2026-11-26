@@ -116,8 +116,9 @@ public struct PoolSegment: Codable, Equatable, Identifiable, Sendable {
     public var accountId: String
     public var driveFileId: String
     public let logicalOffset: Int64
-    public let byteLength: Int64
+    public var byteLength: Int64
     public var sha256: String?
+    public var md5Checksum: String?
 
     public init(
         index: Int,
@@ -125,7 +126,8 @@ public struct PoolSegment: Codable, Equatable, Identifiable, Sendable {
         driveFileId: String = "",
         logicalOffset: Int64,
         byteLength: Int64,
-        sha256: String? = nil
+        sha256: String? = nil,
+        md5Checksum: String? = nil
     ) {
         self.index = index
         self.accountId = accountId
@@ -133,6 +135,7 @@ public struct PoolSegment: Codable, Equatable, Identifiable, Sendable {
         self.logicalOffset = logicalOffset
         self.byteLength = byteLength
         self.sha256 = sha256
+        self.md5Checksum = md5Checksum
     }
 }
 

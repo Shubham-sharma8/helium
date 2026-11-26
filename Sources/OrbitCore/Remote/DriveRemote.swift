@@ -359,6 +359,12 @@ public actor InMemoryLockableRemote: LockableRemote {
         progress: (@Sendable (Int64) -> Void)?
     ) async throws -> RemoteItem {
         guard let old = itemsById[id] else { throw CocoaError(.fileNoSuchFile) }
+        guard expectedVersion == old.contentVersion else {
+            throw PoolConflictError.versionMismatch(
+                expected: expectedVersion,
+                actual: old.contentVersion
+            )
+        }
         let data = try source.read(offset: 0, length: Int(source.size))
         progress?(Int64(data.count))
         seqCounter += 1

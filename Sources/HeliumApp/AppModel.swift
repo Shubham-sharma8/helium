@@ -3,6 +3,7 @@ import Foundation
 import Network
 import OrbitCore
 import SwiftUI
+import os
 
 public enum AppPhase: String, Codable, Sendable {
     case welcomeSignIn
@@ -409,6 +410,7 @@ public struct RealtimeChunkReadEvent: Identifiable, Equatable, Sendable {
 
 @MainActor
 public final class AppModel: ObservableObject {
+    nonisolated private static let logger = Logger(subsystem: "com.cogify.helium", category: "AppModel")
     nonisolated public static let appVersion = "0.0.3"
     nonisolated public static let appBuild = "3"
     nonisolated public static let supportEmail = "connect@cogify.me"
@@ -1197,6 +1199,34 @@ public final class AppModel: ObservableObject {
         Darwin.getxattr(fileURL.path, "com.apple.LaunchServices.OpenWith", nil, 0, 0, 0) > 0
     }
 
+    /// Returns `true` only if `fileURL` is a 0-bytes-on-disk sparse placeholder file (`fileSize > 0` and `allocatedSize == 0`).
+    nonisolated public static func isZeroBytesOnDiskSparsePlaceholder(_ fileURL: URL) -> Bool {
+        guard let vals = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .fileAllocatedSizeKey, .totalFileAllocatedSizeKey]),
+              vals.isRegularFile == true,
+              (vals.fileSize ?? 0) > 0 else {
+            return false
+        }
+        return (vals.totalFileAllocatedSize ?? vals.fileAllocatedSize ?? 1) == 0
+    }
+
+    /// Returns `true` only when `url` is a Helium sparse/attributed placeholder (or directory containing only placeholders/empty) and never a hydrated user file without Helium attributes.
+    nonisolated public static func canSafelyRemoveDeletedVolumeItem(at url: URL) -> Bool {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return false }
+        if !isDir.boolValue {
+            return hasHeliumOpenWithAttribute(url) || isZeroBytesOnDiskSparsePlaceholder(url)
+        }
+        guard let children = try? fm.contentsOfDirectory(
+            at: url,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+        return children.allSatisfy { canSafelyRemoveDeletedVolumeItem(at: $0) }
+    }
+
     /// Opens a hydrated file in its real macOS default application (never looping back to `Helium.app` or `HeliumOpener.app` and never triggering Gatekeeper quarantine alerts).
     nonisolated public static func openHydratedFileInDefaultApp(_ fileURL: URL) {
         removeHeliumOpenWithAttribute(from: fileURL)
@@ -1228,29 +1258,87 @@ public final class AppModel: ObservableObject {
         workspace.activateFileViewerSelecting([fileURL])
     }
 
+    nonisolated public static func makeLocalConflictCopyFilename(for fileName: String, date: Date = Date()) -> String {
+        PooledGoogleDriveRemote.makeConflictCopyFilename(for: fileName, date: date)
+    }
+
     /// Writes a true `Zero bytes on disk` (`0 B on disk`, `fileAllocatedSize == 0`) APFS sparse placeholder at `fileURL` (in `/Volumes/Helium` or `~/Helium`) with logical size `logicalSize` and an inline 175-byte `OpenWith` xattr pointing to invisible `HeliumOpener.app`.
-    /// If `fileURL` currently holds real hydrated bytes, those bytes are preserved in `/tmp/HeliumStreamCache/<fileName>` before `fileURL` is dehydrated to 0 B on disk.
+    /// Dehydrates an existing hydrated file ONLY when 3-way classification returns `.unchanged` or `.refreshFromCloud`.
     nonisolated public static func writeZeroDiskSparsePlaceholder(
         at fileURL: URL,
         logicalSize: Int64,
-        modifiedAt: Date? = nil
+        modifiedAt: Date? = nil,
+        manifest: PoolItemManifest? = nil,
+        baselineStore: LocalSyncBaselineStore = .shared
     ) {
         let fm = FileManager.default
         let parentDir = fileURL.deletingLastPathComponent()
         try? fm.createDirectory(at: parentDir, withIntermediateDirectories: true)
 
-        let existingModDate: Date? = modifiedAt ?? (try? fm.attributesOfItem(atPath: fileURL.path)[.modificationDate] as? Date)
-        let cacheDir = streamCacheDirectoryURL
-        try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        let cachedFileURL = cacheDir.appendingPathComponent(fileURL.lastPathComponent)
+        let localAttrs = try? fm.attributesOfItem(atPath: fileURL.path)
+        let localModDate = localAttrs?[.modificationDate] as? Date
+        let existingModDate: Date? = modifiedAt ?? localModDate
 
-        // 1. If `fileURL` currently has real non-zero bytes on disk (e.g. just dropped into Finder), save a hydrated copy in /tmp/HeliumStreamCache before dehydrating `fileURL` to 0 B on disk
-        if logicalSize > 0 && isHydratedLocalFile(fileURL) {
-            let cachedSize = Int64((try? cachedFileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1)
-            if !isHydratedLocalFile(cachedFileURL) || cachedSize != logicalSize {
-                try? fm.removeItem(at: cachedFileURL)
-                try? fm.copyItem(at: fileURL, to: cachedFileURL)
-                removeHeliumOpenWithAttribute(from: cachedFileURL)
+        // 1. If `fileURL` currently holds hydrated bytes on disk, classify via 3-way baseline check before dehydrating.
+        if isHydratedLocalFile(fileURL) {
+            guard let manifest else {
+                logger.info("Preserving hydrated local file at \(fileURL.path, privacy: .public) because no manifest baseline context was provided")
+                return
+            }
+
+            let localSize = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1)
+            let baseline = baselineStore.baseline(for: manifest.item.id)
+            let cloudSize = max(0, manifest.item.plainSize ?? manifest.item.size)
+            let cloudHash = PooledGoogleDriveRemote.unencryptedSingleSegmentSHA256(for: manifest)
+            let localHash = (baseline == nil && localSize == cloudSize && cloudHash != nil)
+                ? PooledGoogleDriveRemote.computeFileSHA256ZKBase64(at: fileURL)
+                : nil
+
+            let action = PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                localSize: localSize,
+                localModifiedAt: localModDate,
+                localSHA256Base64: localHash,
+                cloudSize: cloudSize,
+                cloudContentVersion: manifest.item.contentVersion,
+                cloudSHA256Base64: cloudHash,
+                baseline: baseline
+            )
+            if baseline == nil && action == .unchanged {
+                baselineStore.recordFile(at: fileURL, manifestId: manifest.item.id, contentVersion: manifest.item.contentVersion)
+            }
+
+            guard action == .unchanged || action == .refreshFromCloud else {
+                logger.info("Preserving hydrated local file at \(fileURL.path, privacy: .public) (action=\(String(describing: action), privacy: .public))")
+                return
+            }
+
+            let cacheDir = streamCacheDirectoryURL
+            let cachedFileURL = cacheDir.appendingPathComponent(fileURL.lastPathComponent)
+            if action == .refreshFromCloud {
+                // Local copy has no edits and cloud changed: discard stale stream cache so next open streams the new cloud version.
+                if fm.fileExists(atPath: cachedFileURL.path) {
+                    try? fm.removeItem(at: cachedFileURL)
+                }
+            } else if logicalSize > 0 {
+                try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+                let cachedSize = Int64((try? cachedFileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1)
+                if !isHydratedLocalFile(cachedFileURL) || cachedSize != logicalSize {
+                    do {
+                        if fm.fileExists(atPath: cachedFileURL.path) {
+                            try fm.removeItem(at: cachedFileURL)
+                        }
+                        try fm.copyItem(at: fileURL, to: cachedFileURL)
+                        removeHeliumOpenWithAttribute(from: cachedFileURL)
+                        let copiedSize = Int64((try? cachedFileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1)
+                        guard isHydratedLocalFile(cachedFileURL) && copiedSize == logicalSize else {
+                            logger.error("Stream cache copy size mismatch for \(fileURL.path, privacy: .public); preserving hydrated local file")
+                            return
+                        }
+                    } catch {
+                        logger.error("Failed to copy hydrated file to stream cache for \(fileURL.path, privacy: .public): \(error.localizedDescription, privacy: .public); preserving hydrated local file")
+                        return
+                    }
+                }
             }
         }
 
@@ -1371,7 +1459,11 @@ public final class AppModel: ObservableObject {
                     try? fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
                 }
                 if mountExists {
-                    nowMaterialized.insert(manifest.item.id)
+                    let mountDirURL = mountRoot.appendingPathComponent(relPath, isDirectory: true)
+                    var isDir: ObjCBool = false
+                    if fm.fileExists(atPath: mountDirURL.path, isDirectory: &isDir), isDir.boolValue {
+                        nowMaterialized.insert(manifest.item.id)
+                    }
                 }
             }
             for manifest in currentManifests where manifest.item.kind == .file && !manifest.item.deleted {
@@ -1380,12 +1472,15 @@ public final class AppModel: ObservableObject {
                 expectedActiveRelPaths.insert(relPath.precomposedStringWithCanonicalMapping)
             }
 
-            // 2. Remove any deleted files/folders, stale renamed/moved placeholders, or internal .blob files from /Volumes/Helium and ~/Helium
+            // 2. Remove any deleted Helium placeholders, stale renamed/moved placeholders, or internal .blob files from /Volumes/Helium and ~/Helium
+            //    Never remove hydrated local files that lack a Helium attribute.
             for root in roots {
                 if let items = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
                     for item in items {
                         let name = item.lastPathComponent.precomposedStringWithCanonicalMapping
-                        if deletedNames.contains(name) || name.hasPrefix("pool_file_") || name.hasSuffix(".blob") {
+                        if name.hasPrefix("pool_file_") || name.hasSuffix(".blob") {
+                            try? fm.removeItem(at: item)
+                        } else if deletedNames.contains(name) && AppModel.canSafelyRemoveDeletedVolumeItem(at: item) {
                             try? fm.removeItem(at: item)
                         } else if AppModel.hasHeliumOpenWithAttribute(item) && !expectedActiveRelPaths.contains(name) {
                             try? fm.removeItem(at: item)
@@ -1394,11 +1489,12 @@ public final class AppModel: ObservableObject {
                 }
             }
             for manifest in currentManifests where manifest.item.deleted {
+                LocalSyncBaselineStore.shared.removeBaseline(for: manifest.item.id)
                 let parentSub = relativeFolderPath(for: manifest.item)
                 let relPath = parentSub.isEmpty ? manifest.item.name : "\(parentSub)/\(manifest.item.name)"
                 for root in roots {
                     let targetURL = root.appendingPathComponent(relPath)
-                    if fm.fileExists(atPath: targetURL.path) {
+                    if AppModel.canSafelyRemoveDeletedVolumeItem(at: targetURL) {
                         try? fm.removeItem(at: targetURL)
                     }
                 }
@@ -1413,7 +1509,7 @@ public final class AppModel: ObservableObject {
                 }
                 let parentSub = relativeFolderPath(for: manifest.item)
                 let modDate = Date(timeIntervalSince1970: TimeInterval(manifest.item.modifiedAt) / 1000.0)
-                let size = max(0, manifest.item.size)
+                let size = max(0, manifest.item.plainSize ?? manifest.item.size)
                 let isPinned = pinnedSet.contains(fileName) || pinnedSet.contains(rawName)
                 let pinnedCandidate = pinnedRoot.appendingPathComponent(rawName)
 
@@ -1424,16 +1520,41 @@ public final class AppModel: ObservableObject {
 
                     if isPinned {
                         if AppModel.isHydratedLocalFile(pinnedCandidate) && !AppModel.isHydratedLocalFile(fileURL) {
-                            try? fm.removeItem(at: fileURL)
-                            try? fm.copyItem(at: pinnedCandidate, to: fileURL)
-                            AppModel.removeHeliumOpenWithAttribute(from: fileURL)
+                            let pinnedSize = Int64((try? pinnedCandidate.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1)
+                            if pinnedSize == size {
+                                try? fm.removeItem(at: fileURL)
+                                try? fm.copyItem(at: pinnedCandidate, to: fileURL)
+                                AppModel.removeHeliumOpenWithAttribute(from: fileURL)
+                                try? fm.setAttributes([.modificationDate: modDate], ofItemAtPath: fileURL.path)
+                                LocalSyncBaselineStore.shared.recordFile(
+                                    at: fileURL,
+                                    manifestId: manifest.item.id,
+                                    contentVersion: manifest.item.contentVersion
+                                )
+                            }
                         }
                     } else {
-                        AppModel.writeZeroDiskSparsePlaceholder(at: fileURL, logicalSize: size, modifiedAt: modDate)
+                        AppModel.writeZeroDiskSparsePlaceholder(
+                            at: fileURL,
+                            logicalSize: size,
+                            modifiedAt: modDate,
+                            manifest: manifest
+                        )
                     }
                 }
+                let mountFileURL = (parentSub.isEmpty ? mountRoot : mountRoot.appendingPathComponent(parentSub, isDirectory: true))
+                    .appendingPathComponent(rawName)
+                let mirrorFileURL = (parentSub.isEmpty ? mirrorRoot : mirrorRoot.appendingPathComponent(parentSub, isDirectory: true))
+                    .appendingPathComponent(rawName)
+                if !isPinned,
+                   !AppModel.isHydratedLocalFile(mountFileURL),
+                   !AppModel.isHydratedLocalFile(mirrorFileURL) {
+                    LocalSyncBaselineStore.shared.removeBaseline(for: manifest.item.id)
+                }
                 if mountExists {
-                    nowMaterialized.insert(manifest.item.id)
+                    if fm.fileExists(atPath: mountFileURL.path) {
+                        nowMaterialized.insert(manifest.item.id)
+                    }
                 }
             }
 
@@ -1516,22 +1637,32 @@ public final class AppModel: ObservableObject {
                     continue
                 }
                 let canonicalTrashName = rawTrashName.precomposedStringWithCanonicalMapping
-                let trashSize = Int64((try? trashedURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1)
+                let trashVals = try? trashedURL.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey])
+                let trashSize = Int64(trashVals?.fileSize ?? -1)
+                let trashIsDir = trashVals?.isDirectory ?? false
                 let trashExt = (canonicalTrashName as NSString).pathExtension.lowercased()
 
+                var matchedCandidates: [PoolItemManifest] = []
                 for m in activeManifests {
+                    let expectedURL = mountRoot.appendingPathComponent(relativeItemPath(for: m.item))
+                    guard !fm.fileExists(atPath: expectedURL.path) else { continue }
+                    guard trashIsDir == (m.item.kind == .folder) else { continue }
+
                     let mCanonical = m.item.name.precomposedStringWithCanonicalMapping
                     if mCanonical == canonicalTrashName {
-                        deletedManifestMap[m.item.id] = m
-                    } else if !trashExt.isEmpty {
+                        matchedCandidates.append(m)
+                    } else if !trashExt.isEmpty && m.item.kind == .file && trashSize > 0 && m.item.size == trashSize {
                         let mExt = (mCanonical as NSString).pathExtension.lowercased()
                         let mBase = (mCanonical as NSString).deletingPathExtension
-                        if mExt == trashExt
-                            && canonicalTrashName.hasPrefix(mBase + " ")
-                            && (trashSize <= 0 || m.item.size == trashSize) {
-                            deletedManifestMap[m.item.id] = m
+                        if mExt == trashExt && canonicalTrashName.hasPrefix(mBase + " ") {
+                            matchedCandidates.append(m)
                         }
                     }
+                }
+                if matchedCandidates.count == 1, let matched = matchedCandidates.first {
+                    deletedManifestMap[matched.item.id] = matched
+                } else if matchedCandidates.count > 1 {
+                    Self.logger.warning("Skipped ambiguous Finder trash item '\(rawTrashName, privacy: .public)' matching \(matchedCandidates.count) manifests")
                 }
                 try? fm.removeItem(at: trashedURL)
             }
@@ -1553,9 +1684,31 @@ public final class AppModel: ObservableObject {
             }
         }
 
-        // 2b. Before treating a missing item as deleted, check if the user RENAMED it in Finder or MOVED it into another folder inside /Volumes/Helium!
+        // 2b. Before treating missing items as deleted, check if the user RENAMED or MOVED them inside /Volumes/Helium.
+        //     Process folders (shallowest first) before files so children of a moved/renamed folder are skipped.
         var renamedOrMovedAny = false
         if !missingFromExpectedPath.isEmpty {
+            func folderDepth(for item: RemoteItem) -> Int {
+                var depth = 0
+                var cursor = item.parentId
+                var visited: Set<String> = [item.id]
+                while let pid = cursor, pid != RemoteItem.rootID, !pid.isEmpty, visited.insert(pid).inserted {
+                    guard let parent = folderByID[pid] else { break }
+                    depth += 1
+                    cursor = parent.parentId
+                }
+                return depth
+            }
+
+            let orderedMissing = missingFromExpectedPath.sorted { lhs, rhs in
+                let lIsFolder = lhs.item.kind == .folder
+                let rIsFolder = rhs.item.kind == .folder
+                if lIsFolder != rIsFolder {
+                    return lIsFolder
+                }
+                return folderDepth(for: lhs.item) < folderDepth(for: rhs.item)
+            }
+
             // Map all active parent folders -> (parentRemoteId, directoryURL, knownCanonicalChildNames)
             var folderDirectories: [(parentId: String, dirURL: URL, knownNames: Set<String>)] = []
             let rootKnown = Set(
@@ -1576,7 +1729,31 @@ public final class AppModel: ObservableObject {
                 folderDirectories.append((fid, dirURL, childKnown))
             }
 
-            for m in missingFromExpectedPath {
+            var parentById: [String: String?] = [:]
+            for m in activeManifests {
+                parentById[m.item.id] = m.item.parentId
+            }
+
+            var matchedMovedIds: Set<String> = []
+            var matchedMovedFolderIds: Set<String> = []
+
+            func hasMovedAncestor(_ itemId: String) -> Bool {
+                var visited: Set<String> = [itemId]
+                var cursor = parentById[itemId] ?? nil
+                while let pid = cursor, !pid.isEmpty, pid != RemoteItem.rootID, visited.insert(pid).inserted {
+                    if matchedMovedFolderIds.contains(pid) {
+                        return true
+                    }
+                    cursor = parentById[pid] ?? nil
+                }
+                return false
+            }
+
+            for m in orderedMissing {
+                if hasMovedAncestor(m.item.id) {
+                    continue
+                }
+
                 let mCanonical = m.item.name.precomposedStringWithCanonicalMapping
                 let oldParentId = m.item.parentId ?? RemoteItem.rootID
                 var matchedMoveOrRename: (newParentId: String, newName: String)?
@@ -1619,6 +1796,10 @@ public final class AppModel: ObservableObject {
                 }
 
                 if let (newParentId, newName) = matchedMoveOrRename {
+                    matchedMovedIds.insert(m.item.id)
+                    if m.item.kind == .folder {
+                        matchedMovedFolderIds.insert(m.item.id)
+                    }
                     _ = try? await pooledRemote.move(id: m.item.id, toParent: newParentId, newName: newName)
                     if let drive = activeDrive, let node = drive.tree.node(remoteID: m.item.id) {
                         let newParentInode = (newParentId == RemoteItem.rootID)
@@ -1636,7 +1817,25 @@ public final class AppModel: ObservableObject {
                         keepList.setKept(newName, kept: true)
                     }
                     renamedOrMovedAny = true
-                } else {
+                }
+            }
+
+            let unresolvedIds = Set(
+                PooledGoogleDriveRemote.unresolvedMissingIdsForDeletion(
+                    missingItemIds: orderedMissing.map(\.item.id),
+                    movedItemIds: matchedMovedIds,
+                    movedFolderIds: matchedMovedFolderIds,
+                    parentById: parentById
+                )
+            )
+            let pendingStep2Deletions = orderedMissing.filter { unresolvedIds.contains($0.item.id) }
+            if PooledGoogleDriveRemote.shouldAbortMassDelete(
+                candidateCount: pendingStep2Deletions.count,
+                totalActiveCount: knownMaterialized.count
+            ) {
+                Self.logger.error("Aborted Finder missing-from-volume deletion pass: \(pendingStep2Deletions.count) of \(knownMaterialized.count) materialized items unresolved after move/rename detection")
+            } else {
+                for m in pendingStep2Deletions {
                     deletedManifestMap[m.item.id] = m
                 }
             }
@@ -1672,6 +1871,7 @@ public final class AppModel: ObservableObject {
             let canonical = m.item.name.precomposedStringWithCanonicalMapping
             deletedDisplayNames.append(m.item.name)
             materializedVolumeManifestIds.remove(m.item.id)
+            LocalSyncBaselineStore.shared.removeBaseline(for: m.item.id)
             explicitlyDeletedFilenames.insert(canonical)
             keepList.setKept(m.item.name, kept: false)
             offlinePinProgressByName.removeValue(forKey: m.item.name)
@@ -1895,6 +2095,11 @@ public final class AppModel: ObservableObject {
         let allManifests = Array(manifests.values).filter { !$0.item.deleted }
         let rootChildren = allManifests.filter { ($0.item.parentId ?? RemoteItem.rootID) == RemoteItem.rootID }
         let knownRootNames = Set(rootChildren.map { $0.item.name.precomposedStringWithCanonicalMapping })
+        var rootFileManifestByName: [String: PoolItemManifest] = [:]
+        for m in rootChildren where m.item.kind == .file {
+            rootFileManifestByName[m.item.name.precomposedStringWithCanonicalMapping] = m
+        }
+        let pinnedSet = keepList.all()
         let busyNames = Set(inFlightFilenames.map { $0.precomposedStringWithCanonicalMapping })
         let deletedNames = Set(explicitlyDeletedFilenames.map { $0.precomposedStringWithCanonicalMapping })
         let mountDir = volumeMountURL
@@ -1919,26 +2124,70 @@ public final class AppModel: ObservableObject {
         }
 
         // Build subfolder scanning descriptors
-        var subfolderTargets: [(folderId: String, relPath: String, knownChildNames: Set<String>)] = []
+        var subfolderTargets: [(folderId: String, relPath: String, knownChildNames: Set<String>, childFileManifestsByName: [String: PoolItemManifest])] = []
         for folderManifest in allManifests where folderManifest.item.kind == .folder {
             let fid = folderManifest.item.id
             let relPath = folderRelativePath(folderManifest.item)
-            let childNames = Set(
-                allManifests
-                    .filter { $0.item.parentId == fid }
-                    .map { $0.item.name.precomposedStringWithCanonicalMapping }
-            )
-            subfolderTargets.append((fid, relPath, childNames))
+            let children = allManifests.filter { $0.item.parentId == fid }
+            let childNames = Set(children.map { $0.item.name.precomposedStringWithCanonicalMapping })
+            var childFiles: [String: PoolItemManifest] = [:]
+            for child in children where child.item.kind == .file {
+                childFiles[child.item.name.precomposedStringWithCanonicalMapping] = child
+            }
+            subfolderTargets.append((fid, relPath, childNames, childFiles))
         }
 
-        let (newRootURLs, newSubfolderBatches): ([URL], [(String, [URL])]) = await Task.detached(priority: .utility) {
+        let (newRootURLs, newSubfolderBatches, modifiedExisting): (
+            [URL],
+            [(String, [URL])],
+            [(manifest: PoolItemManifest, url: URL, relSubPath: String, action: PooledGoogleDriveRemote.LocalFileSyncAction, modDate: Date)]
+        ) = await Task.detached(priority: .utility) {
             let fm = FileManager.default
             var discoveredRoot: [String: URL] = [:]
+            var modifiedByManifestId: [String: (manifest: PoolItemManifest, url: URL, relSubPath: String, action: PooledGoogleDriveRemote.LocalFileSyncAction, modDate: Date)] = [:]
+
+            func recordModifiedCandidateIfNeeded(url: URL, manifest: PoolItemManifest, relSubPath: String) {
+                guard AppModel.isHydratedLocalFile(url) else { return }
+                let vals = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey])
+                guard vals?.isRegularFile == true else { return }
+                let localSize = Int64(vals?.fileSize ?? -1)
+                let localModDate = vals?.contentModificationDate
+                let baseline = LocalSyncBaselineStore.shared.baseline(for: manifest.item.id)
+                let cloudSize = max(0, manifest.item.plainSize ?? manifest.item.size)
+                let cloudHash = PooledGoogleDriveRemote.unencryptedSingleSegmentSHA256(for: manifest)
+                let localHash = (baseline == nil && localSize == cloudSize && cloudHash != nil)
+                    ? PooledGoogleDriveRemote.computeFileSHA256ZKBase64(at: url)
+                    : nil
+
+                let action = PooledGoogleDriveRemote.classifyLocalHydratedFile(
+                    localSize: localSize,
+                    localModifiedAt: localModDate,
+                    localSHA256Base64: localHash,
+                    cloudSize: cloudSize,
+                    cloudContentVersion: manifest.item.contentVersion,
+                    cloudSHA256Base64: cloudHash,
+                    baseline: baseline
+                )
+                if baseline == nil && action == .unchanged {
+                    LocalSyncBaselineStore.shared.recordFile(
+                        at: url,
+                        manifestId: manifest.item.id,
+                        contentVersion: manifest.item.contentVersion
+                    )
+                }
+                guard action != .unchanged else { return }
+
+                let candidateDate = localModDate ?? Date.distantPast
+                if let existing = modifiedByManifestId[manifest.item.id], existing.modDate >= candidateDate {
+                    return
+                }
+                modifiedByManifestId[manifest.item.id] = (manifest, url, relSubPath, action, candidateDate)
+            }
 
             for dir in [mountDir, mirrorDir] where fm.fileExists(atPath: dir.path) {
                 guard let urls = try? fm.contentsOfDirectory(
                     at: dir,
-                    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey],
+                    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
                     options: [.skipsHiddenFiles, .skipsPackageDescendants]
                 ) else { continue }
                 for url in urls {
@@ -1951,8 +2200,12 @@ public final class AppModel: ObservableObject {
                         || canonicalName == "Icon\r" {
                         continue
                     }
+                    guard !busyNames.contains(canonicalName) else { continue }
+                    if let existingManifest = rootFileManifestByName[canonicalName] {
+                        recordModifiedCandidateIfNeeded(url: url, manifest: existingManifest, relSubPath: "")
+                        continue
+                    }
                     guard !knownRootNames.contains(canonicalName),
-                          !busyNames.contains(canonicalName),
                           !deletedNames.contains(canonicalName),
                           discoveredRoot[canonicalName] == nil else {
                         continue
@@ -1976,7 +2229,7 @@ public final class AppModel: ObservableObject {
                     guard fm.fileExists(atPath: subDir.path),
                           let urls = try? fm.contentsOfDirectory(
                               at: subDir,
-                              includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey],
+                              includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
                               options: [.skipsHiddenFiles, .skipsPackageDescendants]
                           ) else { continue }
                     for url in urls {
@@ -1988,8 +2241,12 @@ public final class AppModel: ObservableObject {
                             || canonicalName == "Icon\r" {
                             continue
                         }
+                        guard !busyNames.contains(canonicalName) else { continue }
+                        if let existingManifest = sub.childFileManifestsByName[canonicalName] {
+                            recordModifiedCandidateIfNeeded(url: url, manifest: existingManifest, relSubPath: sub.relPath)
+                            continue
+                        }
                         guard !sub.knownChildNames.contains(canonicalName),
-                              !busyNames.contains(canonicalName),
                               discoveredSub[canonicalName] == nil else {
                             continue
                         }
@@ -2010,14 +2267,321 @@ public final class AppModel: ObservableObject {
             }
 
             let rootSorted = Array(discoveredRoot.values).sorted { $0.lastPathComponent < $1.lastPathComponent }
-            return (rootSorted, subBatches)
+            let modifiedSorted = Array(modifiedByManifestId.values).sorted { $0.manifest.item.name < $1.manifest.item.name }
+            return (rootSorted, subBatches, modifiedSorted)
         }.value
 
+        _ = pinnedSet
         if !newRootURLs.isEmpty {
             await importExternalFiles(newRootURLs, targetFolderId: RemoteItem.rootID)
         }
         for (folderId, urls) in newSubfolderBatches {
             await importExternalFiles(urls, targetFolderId: folderId)
+        }
+        for entry in modifiedExisting {
+            await syncChangedLocalFinderFile(
+                existingManifest: entry.manifest,
+                fileURL: entry.url,
+                relativeSubfolderPath: entry.relSubPath,
+                action: entry.action
+            )
+        }
+    }
+
+    private func syncChangedLocalFinderFile(
+        existingManifest: PoolItemManifest,
+        fileURL: URL,
+        relativeSubfolderPath: String,
+        action: PooledGoogleDriveRemote.LocalFileSyncAction
+    ) async {
+        guard action != .unchanged, let drive = activeDrive else { return }
+        let canonicalName = existingManifest.item.name.precomposedStringWithCanonicalMapping
+        guard !inFlightFilenames.contains(canonicalName) else { return }
+        inFlightFilenames.insert(canonicalName)
+        defer { inFlightFilenames.remove(canonicalName) }
+
+        let isKeptOffline = keepList.isKept(canonicalName) || keepList.isKept(existingManifest.item.name)
+        let mountDir = relativeSubfolderPath.isEmpty ? volumeMountURL : volumeMountURL.appendingPathComponent(relativeSubfolderPath, isDirectory: true)
+        let mirrorDir = relativeSubfolderPath.isEmpty ? localMirrorURL : localMirrorURL.appendingPathComponent(relativeSubfolderPath, isDirectory: true)
+        let mountTarget = mountDir.appendingPathComponent(existingManifest.item.name)
+        let mirrorTarget = mirrorDir.appendingPathComponent(existingManifest.item.name)
+        let pinnedDest = HeliumRealtimeVFSServer.shared.offlinePinnedRootURL.appendingPathComponent(existingManifest.item.name)
+        let streamTarget = Self.streamCacheDirectoryURL.appendingPathComponent(existingManifest.item.name)
+
+        switch action {
+        case .unchanged:
+            return
+        case .overwriteCloud:
+            let preOverwriteDecision = await pooledRemote.verifySegmentBeforeOverwrite(id: existingManifest.item.id)
+            switch preOverwriteDecision {
+            case .overwrite:
+                break
+            case .skip:
+                Self.logger.notice("Skipped overwrite for '\(existingManifest.item.name, privacy: .public)' because live Drive metadata check failed; will retry on next scan")
+                statusMessage = "Skipped overwrite for '\(existingManifest.item.name)' (Drive unreachable); will retry."
+                return
+            case .conflictRefreshFromCloud:
+                await handleLocalConflictUpload(
+                    drive: drive,
+                    existingManifest: existingManifest,
+                    fileURL: fileURL,
+                    mountDir: mountDir,
+                    mirrorDir: mirrorDir,
+                    mountTarget: mountTarget,
+                    mirrorTarget: mirrorTarget,
+                    pinnedDest: pinnedDest,
+                    streamTarget: streamTarget,
+                    isKeptOffline: isKeptOffline,
+                    refreshOriginalFromCloud: true
+                )
+                return
+            case .conflictLeaveOriginal:
+                await handleLocalConflictUpload(
+                    drive: drive,
+                    existingManifest: existingManifest,
+                    fileURL: fileURL,
+                    mountDir: mountDir,
+                    mirrorDir: mirrorDir,
+                    mountTarget: mountTarget,
+                    mirrorTarget: mirrorTarget,
+                    pinnedDest: pinnedDest,
+                    streamTarget: streamTarget,
+                    isKeptOffline: isKeptOffline,
+                    refreshOriginalFromCloud: false
+                )
+                return
+            }
+
+            do {
+                let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+                let modDate = (attrs?[.modificationDate] as? Date) ?? Date()
+                let baseVersion = LocalSyncBaselineStore.shared.baseline(for: existingManifest.item.id)?.contentVersion
+                    ?? existingManifest.item.contentVersion
+                let updatedItem = try await drive.remote.uploadOverwrite(
+                    id: existingManifest.item.id,
+                    from: fileURL,
+                    expectedVersion: baseVersion,
+                    modifiedAt: modDate,
+                    progress: nil
+                )
+                let updatedCloudDate = Date(timeIntervalSince1970: TimeInterval(updatedItem.modifiedAt) / 1000.0)
+                let updatedPlainSize = max(0, updatedItem.plainSize ?? updatedItem.size)
+                let updatedManifest = PoolItemManifest(
+                    item: updatedItem,
+                    placementMode: existingManifest.placementMode,
+                    segments: existingManifest.segments
+                )
+
+                await Task.detached(priority: .userInitiated) {
+                    let fm = FileManager.default
+                    try? fm.createDirectory(at: Self.streamCacheDirectoryURL, withIntermediateDirectories: true)
+                    if fileURL.standardizedFileURL != streamTarget.standardizedFileURL {
+                        try? fm.removeItem(at: streamTarget)
+                        try? fm.copyItem(at: fileURL, to: streamTarget)
+                        AppModel.removeHeliumOpenWithAttribute(from: streamTarget)
+                    }
+                    if isKeptOffline {
+                        try? fm.createDirectory(at: HeliumRealtimeVFSServer.shared.offlinePinnedRootURL, withIntermediateDirectories: true)
+                        if fileURL.standardizedFileURL != pinnedDest.standardizedFileURL {
+                            try? fm.removeItem(at: pinnedDest)
+                            try? fm.copyItem(at: fileURL, to: pinnedDest)
+                            AppModel.removeHeliumOpenWithAttribute(from: pinnedDest)
+                            try? fm.setAttributes([.modificationDate: updatedCloudDate], ofItemAtPath: pinnedDest.path)
+                        }
+                        for target in [mountTarget, mirrorTarget] where fm.fileExists(atPath: target.deletingLastPathComponent().path) {
+                            if fileURL.standardizedFileURL != target.standardizedFileURL {
+                                try? fm.removeItem(at: target)
+                                try? fm.copyItem(at: fileURL, to: target)
+                            }
+                            AppModel.removeHeliumOpenWithAttribute(from: target)
+                            try? fm.setAttributes([.modificationDate: updatedCloudDate], ofItemAtPath: target.path)
+                        }
+                        let baselineURL = fm.fileExists(atPath: mountTarget.path) ? mountTarget : mirrorTarget
+                        LocalSyncBaselineStore.shared.recordFile(
+                            at: baselineURL,
+                            manifestId: updatedItem.id,
+                            contentVersion: updatedItem.contentVersion
+                        )
+                    } else {
+                        if fm.fileExists(atPath: fileURL.path) {
+                            LocalSyncBaselineStore.shared.recordFile(
+                                at: fileURL,
+                                manifestId: updatedItem.id,
+                                contentVersion: updatedItem.contentVersion
+                            )
+                        }
+                        for target in [mountTarget, mirrorTarget] where fm.fileExists(atPath: target.deletingLastPathComponent().path) {
+                            AppModel.writeZeroDiskSparsePlaceholder(
+                                at: target,
+                                logicalSize: updatedPlainSize,
+                                modifiedAt: updatedCloudDate,
+                                manifest: updatedManifest
+                            )
+                        }
+                        if !AppModel.isHydratedLocalFile(mountTarget) && !AppModel.isHydratedLocalFile(mirrorTarget) {
+                            LocalSyncBaselineStore.shared.removeBaseline(for: updatedItem.id)
+                        }
+                    }
+                }.value
+
+                try? await drive.sync()
+                await refreshState()
+                statusMessage = "Updated '\(existingManifest.item.name)' on Google Drive (v\(updatedItem.contentVersion))"
+            } catch PoolConflictError.versionMismatch {
+                Self.logger.notice("Version mismatch during overwrite of '\(existingManifest.item.name, privacy: .public)'; handling as conflict")
+                await handleLocalConflictUpload(
+                    drive: drive,
+                    existingManifest: existingManifest,
+                    fileURL: fileURL,
+                    mountDir: mountDir,
+                    mirrorDir: mirrorDir,
+                    mountTarget: mountTarget,
+                    mirrorTarget: mirrorTarget,
+                    pinnedDest: pinnedDest,
+                    streamTarget: streamTarget,
+                    isKeptOffline: isKeptOffline,
+                    refreshOriginalFromCloud: true
+                )
+            } catch {
+                Self.logger.error("Failed to overwrite modified local file '\(existingManifest.item.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+                statusMessage = "Could not upload updated '\(existingManifest.item.name)': \(error.localizedDescription)"
+            }
+        case .refreshFromCloud:
+            await Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                for stale in [mountTarget, mirrorTarget, pinnedDest, streamTarget] where fm.fileExists(atPath: stale.path) {
+                    try? fm.removeItem(at: stale)
+                }
+                LocalSyncBaselineStore.shared.removeBaseline(for: existingManifest.item.id)
+            }.value
+            try? await drive.sync()
+            await refreshState()
+            if isKeptOffline, let refreshedNode = drive.tree.node(remoteID: existingManifest.item.id) {
+                startOfflineKeepDownload(for: [refreshedNode])
+            }
+            statusMessage = "Refreshed '\(existingManifest.item.name)' from newer Google Drive version."
+        case .conflict:
+            await handleLocalConflictUpload(
+                drive: drive,
+                existingManifest: existingManifest,
+                fileURL: fileURL,
+                mountDir: mountDir,
+                mirrorDir: mirrorDir,
+                mountTarget: mountTarget,
+                mirrorTarget: mirrorTarget,
+                pinnedDest: pinnedDest,
+                streamTarget: streamTarget,
+                isKeptOffline: isKeptOffline,
+                refreshOriginalFromCloud: true
+            )
+        }
+    }
+
+    private func handleLocalConflictUpload(
+        drive: OrbitDrive,
+        existingManifest: PoolItemManifest,
+        fileURL: URL,
+        mountDir: URL,
+        mirrorDir: URL,
+        mountTarget: URL,
+        mirrorTarget: URL,
+        pinnedDest: URL,
+        streamTarget: URL,
+        isKeptOffline: Bool,
+        refreshOriginalFromCloud: Bool
+    ) async {
+        let conflictName = Self.makeLocalConflictCopyFilename(for: existingManifest.item.name)
+        inFlightFilenames.insert(conflictName.precomposedStringWithCanonicalMapping)
+        defer { inFlightFilenames.remove(conflictName.precomposedStringWithCanonicalMapping) }
+
+        do {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let modDate = (attrs?[.modificationDate] as? Date) ?? Date()
+            let localSize = Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            let parentFolderId = existingManifest.item.parentId ?? RemoteItem.rootID
+            let uploadedConflict = try await drive.remote.uploadNewFile(
+                from: fileURL,
+                name: conflictName,
+                parentId: parentFolderId,
+                clientId: UUID().uuidString,
+                modifiedAt: modDate,
+                link: false,
+                progress: nil
+            )
+            let conflictCloudDate = Date(timeIntervalSince1970: TimeInterval(uploadedConflict.modifiedAt) / 1000.0)
+            let conflictPlainSize = max(0, uploadedConflict.plainSize ?? uploadedConflict.size)
+            let conflictManifest = PoolItemManifest(
+                item: uploadedConflict,
+                placementMode: .wholeFileSmartPlacement,
+                segments: []
+            )
+            let conflictMount = mountDir.appendingPathComponent(conflictName)
+            let conflictMirror = mirrorDir.appendingPathComponent(conflictName)
+            let conflictStream = Self.streamCacheDirectoryURL.appendingPathComponent(conflictName)
+
+            await Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                try? fm.createDirectory(at: Self.streamCacheDirectoryURL, withIntermediateDirectories: true)
+                try? fm.removeItem(at: conflictStream)
+                try? fm.copyItem(at: fileURL, to: conflictStream)
+                AppModel.removeHeliumOpenWithAttribute(from: conflictStream)
+
+                for target in [conflictMount, conflictMirror] where fm.fileExists(atPath: target.deletingLastPathComponent().path) {
+                    AppModel.writeZeroDiskSparsePlaceholder(
+                        at: target,
+                        logicalSize: conflictPlainSize,
+                        modifiedAt: conflictCloudDate,
+                        manifest: conflictManifest
+                    )
+                }
+
+                if refreshOriginalFromCloud {
+                    // Conflict copy is safely uploaded; remove stale local copies so the original item refreshes cleanly from cloud.
+                    for stale in [mountTarget, mirrorTarget, pinnedDest, streamTarget] where fm.fileExists(atPath: stale.path) {
+                        try? fm.removeItem(at: stale)
+                    }
+                    LocalSyncBaselineStore.shared.removeBaseline(for: existingManifest.item.id)
+                } else if fm.fileExists(atPath: fileURL.path) {
+                    // Keep the original item untouched, and advance the baseline to avoid re-uploading identical conflict copies before Recycle Bin sync.
+                    LocalSyncBaselineStore.shared.recordFile(
+                        at: fileURL,
+                        manifestId: existingManifest.item.id,
+                        contentVersion: existingManifest.item.contentVersion
+                    )
+                }
+            }.value
+
+            let conflictItem = FileConflictItem(
+                originalItemId: existingManifest.item.id,
+                conflictCopyItemId: uploadedConflict.id,
+                fileName: existingManifest.item.name,
+                conflictCopyFileName: conflictName,
+                originalSizeBytes: max(0, existingManifest.item.plainSize ?? existingManifest.item.size),
+                conflictCopySizeBytes: localSize,
+                originalModifiedAt: Date(timeIntervalSince1970: TimeInterval(existingManifest.item.modifiedAt) / 1000.0),
+                conflictCopyModifiedAt: modDate,
+                originDeviceName: Host.current().localizedName ?? "This Mac"
+            )
+            activeConflicts.removeAll { $0.originalItemId == existingManifest.item.id }
+            activeConflicts.insert(conflictItem, at: 0)
+            saveSyncophantFeaturesState()
+
+            if refreshOriginalFromCloud {
+                await pooledRemote.syncExistingVaultFiles()
+                try? await drive.sync()
+                await refreshState()
+                if isKeptOffline, let refreshedNode = drive.tree.node(remoteID: existingManifest.item.id) {
+                    startOfflineKeepDownload(for: [refreshedNode])
+                }
+                statusMessage = "Saved conflict copy '\(conflictName)' and refreshed '\(existingManifest.item.name)' from Google Drive."
+            } else {
+                try? await drive.sync()
+                await refreshState()
+                statusMessage = "Saved conflict copy '\(conflictName)' because '\(existingManifest.item.name)' is missing or trashed on Google Drive."
+            }
+        } catch {
+            Self.logger.error("Failed to upload conflict copy for '\(existingManifest.item.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+            statusMessage = "Could not upload conflict copy for '\(existingManifest.item.name)': \(error.localizedDescription)"
         }
     }
 
@@ -2838,12 +3402,32 @@ public final class AppModel: ObservableObject {
                 }
                 try? handle?.close()
                 Self.removeHeliumOpenWithAttribute(from: destURL)
-                if FileManager.default.fileExists(atPath: destURL.path) {
+                if offset >= fileTotal, FileManager.default.fileExists(atPath: destURL.path) {
+                    let manifestForNode = node.remoteID.flatMap { self.manifests[$0] }
+                    let cloudModDate = manifestForNode.map {
+                        Date(timeIntervalSince1970: TimeInterval($0.item.modifiedAt) / 1000.0)
+                    }
+                    if let cloudModDate {
+                        try? FileManager.default.setAttributes([.modificationDate: cloudModDate], ofItemAtPath: destURL.path)
+                    }
                     for target in [mountURL, mirrorURL] where FileManager.default.fileExists(atPath: target.deletingLastPathComponent().path) {
                         try? FileManager.default.removeItem(at: target)
                         try? FileManager.default.copyItem(at: destURL, to: target)
                         Self.removeHeliumOpenWithAttribute(from: target)
+                        if let cloudModDate {
+                            try? FileManager.default.setAttributes([.modificationDate: cloudModDate], ofItemAtPath: target.path)
+                        }
                     }
+                    if let manifestForNode {
+                        let baselineURL = FileManager.default.fileExists(atPath: mountURL.path) ? mountURL : mirrorURL
+                        LocalSyncBaselineStore.shared.recordFile(
+                            at: baselineURL,
+                            manifestId: manifestForNode.item.id,
+                            contentVersion: manifestForNode.item.contentVersion
+                        )
+                    }
+                } else if FileManager.default.fileExists(atPath: destURL.path) {
+                    try? FileManager.default.removeItem(at: destURL)
                 }
             }
 
@@ -3279,6 +3863,7 @@ public final class AppModel: ObservableObject {
 
         if let remID = node.remoteID {
             materializedVolumeManifestIds.remove(remID)
+            LocalSyncBaselineStore.shared.removeBaseline(for: remID)
             UserDefaults.standard.set(Array(materializedVolumeManifestIds).sorted(), forKey: "helium.materializedVolumeManifestIds")
             _ = await pooledRemote.moveToTrash(id: remID)
             _ = drive.tree.remove(node.id)
@@ -3331,7 +3916,7 @@ public final class AppModel: ObservableObject {
             let deletedDate = Date(timeIntervalSince1970: TimeInterval(m.item.modifiedAt) / 1000.0)
             let daysElapsed = Int(now.timeIntervalSince(deletedDate) / 86_400.0)
             let daysLeft = 30 - daysElapsed
-            if daysLeft <= 0 {
+            if m.item.modifiedAt > 0 && daysLeft <= 0 {
                 // Past 30-day retention window -> permanently delete segments from Google Drive
                 try? await pooledRemote.delete(id: m.item.id)
                 continue
@@ -3353,13 +3938,22 @@ public final class AppModel: ObservableObject {
     }
 
     public func restoreTrashedItem(_ item: TrashedFileItem) async {
-        let canonical = item.fileName.precomposedStringWithCanonicalMapping
-        explicitlyDeletedFilenames.remove(canonical)
+        let restoredManifests = await pooledRemote.restoreWithHierarchy(id: item.id)
+        guard restoredManifests.contains(where: { $0.item.id == item.id }) else {
+            await refreshState()
+            statusMessage = "Could not restore '\(item.fileName)' from Recycle Bin. Please check your Google Drive connection and try again."
+            return
+        }
+        for restored in restoredManifests {
+            let canonical = restored.item.name.precomposedStringWithCanonicalMapping
+            explicitlyDeletedFilenames.remove(canonical)
+        }
         UserDefaults.standard.set(Array(explicitlyDeletedFilenames).sorted(), forKey: "helium.explicitlyDeletedFilenames")
-        _ = await pooledRemote.restoreFromTrash(id: item.id)
         await rebuildActiveDriveInstance()
         await refreshState()
-        statusMessage = "Restored '\(item.fileName)' from Recycle Bin back to /Volumes/Helium & Google Drive Vault"
+        statusMessage = restoredManifests.count > 1
+            ? "Restored '\(item.fileName)' and \(restoredManifests.count - 1) related item(s) from Recycle Bin back to /Volumes/Helium & Google Drive Vault"
+            : "Restored '\(item.fileName)' from Recycle Bin back to /Volumes/Helium & Google Drive Vault"
     }
 
     public func undoLastDelete() {
@@ -3680,13 +4274,35 @@ public final class AppModel: ObservableObject {
                             }
                             AppModel.removeHeliumOpenWithAttribute(from: target)
                         }
+                        let baselineURL = fm.fileExists(atPath: mountDest.path) ? mountDest : mirrorDest
+                        LocalSyncBaselineStore.shared.recordFile(
+                            at: baselineURL,
+                            manifestId: item.id,
+                            contentVersion: item.contentVersion
+                        )
                     } else {
+                        let uploadedManifest = PoolItemManifest(
+                            item: item,
+                            placementMode: .wholeFileSmartPlacement,
+                            segments: []
+                        )
+                        if fm.fileExists(atPath: url.path) {
+                            LocalSyncBaselineStore.shared.recordFile(
+                                at: url,
+                                manifestId: item.id,
+                                contentVersion: item.contentVersion
+                            )
+                        }
                         for target in [mountDest, mirrorDest] where fm.fileExists(atPath: target.deletingLastPathComponent().path) {
                             AppModel.writeZeroDiskSparsePlaceholder(
                                 at: target,
                                 logicalSize: fileSize,
-                                modifiedAt: sourceModDate
+                                modifiedAt: sourceModDate,
+                                manifest: uploadedManifest
                             )
+                        }
+                        if !AppModel.isHydratedLocalFile(mountDest) && !AppModel.isHydratedLocalFile(mirrorDest) {
+                            LocalSyncBaselineStore.shared.removeBaseline(for: item.id)
                         }
                     }
                 }.value
