@@ -1,18 +1,48 @@
 import Foundation
 import CryptoKit
+import os
 
 public struct GoogleDriveRemoteFile: Codable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let mimeType: String
     public let size: Int64
+    public let md5Checksum: String?
+    public let modifiedTime: String?
 
-    public init(id: String, name: String, mimeType: String, size: Int64) {
+    public init(
+        id: String,
+        name: String,
+        mimeType: String,
+        size: Int64,
+        md5Checksum: String? = nil,
+        modifiedTime: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.mimeType = mimeType
         self.size = size
+        self.md5Checksum = md5Checksum
+        self.modifiedTime = modifiedTime
     }
+}
+
+public struct GoogleDriveLiveFileMetadata: Equatable, Sendable {
+    public let md5Checksum: String?
+    public let size: Int64
+    public let trashed: Bool
+
+    public init(md5Checksum: String?, size: Int64, trashed: Bool) {
+        self.md5Checksum = md5Checksum
+        self.size = size
+        self.trashed = trashed
+    }
+}
+
+public enum GoogleDriveLiveMetadataResult: Equatable, Sendable {
+    case found(GoogleDriveLiveFileMetadata)
+    case missingOrTrashed
+    case failed
 }
 
 public enum GoogleDriveTransportError: LocalizedError, Sendable {
@@ -25,6 +55,17 @@ public enum GoogleDriveTransportError: LocalizedError, Sendable {
             return "Google Drive session expired for \(email). Please click 'Sign in with Google' to reconnect."
         case .httpError(let code, let msg):
             return "Google Drive API HTTP \(code): \(msg)"
+        }
+    }
+}
+
+public enum PoolConflictError: LocalizedError, Equatable, Sendable {
+    case versionMismatch(expected: Int64, actual: Int64)
+
+    public var errorDescription: String? {
+        switch self {
+        case .versionMismatch(let expected, let actual):
+            return "Cloud file version changed (expected v\(expected), actual v\(actual))."
         }
     }
 }
@@ -286,9 +327,14 @@ public final class URLSessionGoogleDriveTransport: GoogleDriveTransport, Sendabl
         driveFileId: String,
         targetFolderId: String
     ) async throws {
-        guard let token = account.accessToken, !token.isEmpty else { return }
+        guard let token = account.accessToken, !token.isEmpty else {
+            throw GoogleDriveTransportError.missingAccessToken(email: account.email)
+        }
         let safeFileId = try validatedDriveFileId(driveFileId)
-        let safeTargetId = try validatedDriveFileId(targetFolderId)
+        let resolvedTarget = (targetFolderId.isEmpty || targetFolderId.hasPrefix("helium_root_"))
+            ? ((try? await ensureHeliumVaultFolder(accessToken: token)) ?? "root")
+            : targetFolderId
+        let safeTargetId = try validatedDriveFileId(resolvedTarget)
 
         // Fetch current parents of the file first
         let getURL = try makeDriveURL(
@@ -298,11 +344,16 @@ public final class URLSessionGoogleDriveTransport: GoogleDriveTransport, Sendabl
         var getReq = URLRequest(url: getURL, timeoutInterval: 30)
         getReq.httpMethod = "GET"
         getReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (getData, getResp) = try await session.data(for: getReq)
+        guard let httpGet = getResp as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(httpGet.statusCode) else {
+            let msg = String(data: getData, encoding: .utf8) ?? "Get file parents failed"
+            throw GoogleDriveTransportError.httpError(statusCode: httpGet.statusCode, message: msg)
+        }
         var existingParents: [String] = []
-        if let (getData, getResp) = try? await session.data(for: getReq),
-           let httpGet = getResp as? HTTPURLResponse,
-           (200..<300).contains(httpGet.statusCode),
-           let json = try? JSONSerialization.jsonObject(with: getData) as? [String: Any],
+        if let json = try? JSONSerialization.jsonObject(with: getData) as? [String: Any],
            let parents = json["parents"] as? [String] {
             existingParents = parents.filter { $0 != safeTargetId }
         }
@@ -319,7 +370,14 @@ public final class URLSessionGoogleDriveTransport: GoogleDriveTransport, Sendabl
         patchReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         patchReq.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         patchReq.httpBody = try JSONSerialization.data(withJSONObject: ["trashed": false])
-        _ = try await session.data(for: patchReq)
+        let (patchData, patchResp) = try await session.data(for: patchReq)
+        guard let httpPatch = patchResp as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(httpPatch.statusCode) else {
+            let msg = String(data: patchData, encoding: .utf8) ?? "Move file failed"
+            throw GoogleDriveTransportError.httpError(statusCode: httpPatch.statusCode, message: msg)
+        }
     }
 
     public func listFilesInFolder(
@@ -328,6 +386,32 @@ public final class URLSessionGoogleDriveTransport: GoogleDriveTransport, Sendabl
     ) async throws -> [GoogleDriveRemoteFile] {
         let all = try await listItemsInFolder(account: account, folderId: folderId)
         return all.filter { $0.mimeType != "application/vnd.google-apps.folder" }
+    }
+
+    static func parseDriveFileListPage(from data: Data) throws -> (files: [GoogleDriveRemoteFile], nextPageToken: String?) {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let files = json["files"] as? [[String: Any]] else {
+            throw URLError(.cannotParseResponse)
+        }
+        let parsed = files.compactMap { dict -> GoogleDriveRemoteFile? in
+            guard let id = dict["id"] as? String,
+                  let name = dict["name"] as? String else { return nil }
+            let mime = (dict["mimeType"] as? String) ?? "application/octet-stream"
+            let sizeStr = dict["size"] as? String ?? "0"
+            let size = Int64(sizeStr) ?? 0
+            let md5Checksum = (dict["md5Checksum"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let modifiedTime = (dict["modifiedTime"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return GoogleDriveRemoteFile(
+                id: id,
+                name: name,
+                mimeType: mime,
+                size: size,
+                md5Checksum: md5Checksum,
+                modifiedTime: modifiedTime
+            )
+        }
+        let nextToken = (json["nextPageToken"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return (parsed, nextToken)
     }
 
     /// Lists both regular files AND folders (`application/vnd.google-apps.folder`) inside `folderId` on Google Drive.
@@ -341,37 +425,42 @@ public final class URLSessionGoogleDriveTransport: GoogleDriveTransport, Sendabl
         let targetFolder = (folderId.isEmpty || folderId.hasPrefix("helium_root_")) ? "root" : folderId
         let safeFolder = try validatedDriveFileId(targetFolder)
         let query = "'\(safeFolder)' in parents and trashed = false"
-        let url = try makeDriveURL(
-            path: "/drive/v3/files",
-            queryItems: [
+
+        var allFiles: [GoogleDriveRemoteFile] = []
+        var pageToken: String? = nil
+        var seenPageTokens = Set<String>()
+
+        repeat {
+            var queryItems = [
                 URLQueryItem(name: "q", value: query),
-                URLQueryItem(name: "fields", value: "files(id,name,mimeType,size)"),
+                URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime)"),
                 URLQueryItem(name: "pageSize", value: "250")
             ]
-        )
-        var req = URLRequest(url: url, timeoutInterval: 30)
-        req.httpMethod = "GET"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            let msg = String(data: data, encoding: .utf8) ?? "List folder failed"
-            throw GoogleDriveTransportError.httpError(statusCode: http.statusCode, message: msg)
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let files = json["files"] as? [[String: Any]] else {
-            return []
-        }
-        return files.compactMap { dict in
-            guard let id = dict["id"] as? String,
-                  let name = dict["name"] as? String else { return nil }
-            let mime = (dict["mimeType"] as? String) ?? "application/octet-stream"
-            let sizeStr = dict["size"] as? String ?? "0"
-            let size = Int64(sizeStr) ?? 0
-            return GoogleDriveRemoteFile(id: id, name: name, mimeType: mime, size: size)
-        }
+            if let pageToken {
+                queryItems.append(URLQueryItem(name: "pageToken", value: pageToken))
+            }
+            let url = try makeDriveURL(path: "/drive/v3/files", queryItems: queryItems)
+            var req = URLRequest(url: url, timeoutInterval: 30)
+            req.httpMethod = "GET"
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let (data, resp) = try await session.data(for: req)
+            guard let http = resp as? HTTPURLResponse else {
+                throw URLError(.badServerResponse)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let msg = String(data: data, encoding: .utf8) ?? "List folder failed"
+                throw GoogleDriveTransportError.httpError(statusCode: http.statusCode, message: msg)
+            }
+            let page = try Self.parseDriveFileListPage(from: data)
+            allFiles.append(contentsOf: page.files)
+            if let next = page.nextPageToken, seenPageTokens.insert(next).inserted {
+                pageToken = next
+            } else {
+                pageToken = nil
+            }
+        } while pageToken != nil
+
+        return allFiles
     }
 
     /// Returns `true` ONLY when Google Drive API explicitly confirms the file/folder is HTTP 404 (not found) or has `"trashed": true`.
@@ -403,6 +492,51 @@ public final class URLSessionGoogleDriveTransport: GoogleDriveTransport, Sendabl
             return trashed
         }
         return false
+    }
+
+    static func parseDriveLiveFileMetadataResponse(data: Data, statusCode: Int) throws -> GoogleDriveLiveMetadataResult {
+        if statusCode == 401 {
+            let msg = String(data: data, encoding: .utf8) ?? "Unauthorized"
+            throw GoogleDriveTransportError.httpError(statusCode: 401, message: msg)
+        }
+        if statusCode == 404 {
+            return .missingOrTrashed
+        }
+        guard (200..<300).contains(statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .failed
+        }
+        let trashed = (json["trashed"] as? Bool) ?? false
+        if trashed {
+            return .missingOrTrashed
+        }
+        let md5 = (json["md5Checksum"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let size = Int64(json["size"] as? String ?? "") ?? (json["size"] as? NSNumber)?.int64Value ?? 0
+        return .found(GoogleDriveLiveFileMetadata(md5Checksum: md5, size: size, trashed: false))
+    }
+
+    /// Fetches live metadata (`md5Checksum,size,trashed`) for one Drive file before a local overwrite upload.
+    /// Throws on HTTP 401 or transport failure so callers can refresh tokens once and skip overwrite on transient errors.
+    public func fetchLiveFileMetadata(
+        account: LinkedGoogleAccount,
+        driveFileId: String
+    ) async throws -> GoogleDriveLiveMetadataResult {
+        guard let token = account.accessToken, !token.isEmpty else {
+            throw GoogleDriveTransportError.missingAccessToken(email: account.email)
+        }
+        let safeFileId = try validatedDriveFileId(driveFileId)
+        let url = try makeDriveURL(
+            path: "/drive/v3/files/\(safeFileId)",
+            queryItems: [URLQueryItem(name: "fields", value: "md5Checksum,size,trashed")]
+        )
+        var req = URLRequest(url: url, timeoutInterval: 20)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            return .failed
+        }
+        return try Self.parseDriveLiveFileMetadataResponse(data: data, statusCode: http.statusCode)
     }
 
     public func putSegment(
@@ -1114,11 +1248,16 @@ public struct PoolItemManifest: Codable, Equatable, Sendable {
 /// Unified multi-account Google Drive implementation of `LockableRemote`, `DriveRemote`, `KeysRemote`, and `ShareRemote`.
 /// Supports BOTH Mode 1 (Whole-File Smart Placement) and Mode 2 (Cross-Account Segment Striping) and plugs directly into `LockedRemote` and `OrbitDrive`.
 public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
+    private static let logger = Logger(subsystem: "com.cogify.helium", category: "PooledGoogleDriveRemote")
+    private static let restoreSyncGraceSeconds: TimeInterval = 120
     public let pool: GoogleAccountPool
     public var allocator: StoragePoolAllocator
     private var manifestsById: [String: PoolItemManifest] = [:]
     private var seqCounter: Int64 = 0
     private let manifestsPersistenceURL: URL?
+    private var restoringItemIds: Set<String> = []
+    private var recentlyRestoredAt: [String: Date] = [:]
+    private var inProgressReplaceItemIds: Set<String> = []
     private var serverKeysState = ServerKeys(
         mode: "off",
         keyCheck: nil,
@@ -1263,12 +1402,266 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
         await pool.reconcileHeliumUsage(activeBytesByAccount: activeBytesByAccount)
     }
 
+    public static func shouldAbortMassDelete(candidateCount: Int, totalActiveCount: Int) -> Bool {
+        guard candidateCount > 0 else { return false }
+        if candidateCount > 10 {
+            return true
+        }
+        guard totalActiveCount > 0 else { return false }
+        return candidateCount * 5 > totalActiveCount
+    }
+
+    public enum LocalFileSyncAction: Equatable, Sendable {
+        case unchanged
+        case overwriteCloud
+        case refreshFromCloud
+        case conflict
+    }
+
+    public static func unencryptedSingleSegmentSHA256(for manifest: PoolItemManifest) -> String? {
+        guard manifest.item.encryption == nil,
+              manifest.segments.count == 1,
+              let sha = manifest.segments.first?.sha256,
+              !sha.isEmpty else {
+            return nil
+        }
+        return sha
+    }
+
+    public static func computeFileSHA256ZKBase64(at fileURL: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            let chunk = handle.readData(ofLength: 1_048_576)
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        return ZK.b64(Data(hasher.finalize()))
+    }
+
+    public enum PreOverwriteCloudCheckDecision: Equatable, Sendable {
+        case overwrite
+        case conflictRefreshFromCloud
+        case conflictLeaveOriginal
+        case skip
+
+        public var isConflict: Bool {
+            self == .conflictRefreshFromCloud || self == .conflictLeaveOriginal
+        }
+    }
+
+    public static func decideBeforeOverwrite(
+        storedMD5: String?,
+        storedSize: Int64,
+        fetchResult: GoogleDriveLiveMetadataResult
+    ) -> PreOverwriteCloudCheckDecision {
+        switch fetchResult {
+        case .failed:
+            return .skip
+        case .missingOrTrashed:
+            return .conflictLeaveOriginal
+        case .found(let live):
+            if live.trashed {
+                return .conflictLeaveOriginal
+            }
+            if isCloudContentEdited(
+                storedMD5: storedMD5,
+                storedSize: storedSize,
+                listedMD5: live.md5Checksum,
+                listedSize: live.size
+            ) {
+                return .conflictRefreshFromCloud
+            }
+            return .overwrite
+        }
+    }
+
+    /// Checks live Google Drive metadata (`md5Checksum,size,trashed`) right before `.overwriteCloud` uploads.
+    /// Encrypted or multi-segment items keep the existing overwrite path.
+    public func verifySegmentBeforeOverwrite(id itemId: String) async -> PreOverwriteCloudCheckDecision {
+        guard let manifest = manifestsById[itemId],
+              manifest.item.encryption == nil,
+              manifest.placementMode == .wholeFileSmartPlacement,
+              manifest.segments.count == 1,
+              let seg = manifest.segments.first else {
+            return .overwrite
+        }
+        if pool.transport is MockGoogleDriveCloud
+            || seg.driveFileId.isEmpty
+            || seg.driveFileId.hasPrefix("gdrive_")
+            || seg.driveFileId.hasPrefix("gfile_") {
+            return .overwrite
+        }
+        guard let rawAcc = await pool.account(id: seg.accountId) else {
+            return .skip
+        }
+        let acc = await ensureValidToken(for: rawAcc)
+        guard let token = acc.accessToken, !token.isEmpty else {
+            return .skip
+        }
+        let liveTransport = (pool.transport as? HybridGoogleDriveTransport)?.live
+            ?? (pool.transport as? URLSessionGoogleDriveTransport)
+            ?? URLSessionGoogleDriveTransport()
+
+        let fetchResult: GoogleDriveLiveMetadataResult
+        do {
+            fetchResult = try await liveTransport.fetchLiveFileMetadata(account: acc, driveFileId: seg.driveFileId)
+        } catch GoogleDriveTransportError.httpError(let statusCode, _) where statusCode == 401 {
+            let refreshed = await ensureValidToken(for: acc, forceRefresh: true)
+            guard let freshToken = refreshed.accessToken, !freshToken.isEmpty, freshToken != token else {
+                return .skip
+            }
+            do {
+                fetchResult = try await liveTransport.fetchLiveFileMetadata(account: refreshed, driveFileId: seg.driveFileId)
+            } catch {
+                Self.logger.notice("Live metadata retry failed before overwrite for '\(manifest.item.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+                return .skip
+            }
+        } catch {
+            Self.logger.notice("Live metadata check failed before overwrite for '\(manifest.item.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+            return .skip
+        }
+
+        return Self.decideBeforeOverwrite(
+            storedMD5: seg.md5Checksum,
+            storedSize: seg.byteLength,
+            fetchResult: fetchResult
+        )
+    }
+
+    public static func makeConflictCopyFilename(for fileName: String, date: Date = Date()) -> String {
+        let ns = fileName as NSString
+        let ext = ns.pathExtension
+        let base = ext.isEmpty ? fileName : ns.deletingPathExtension
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.dateFormat = "yyyy-MM-dd HHmm"
+        let stamp = df.string(from: date)
+        if ext.isEmpty {
+            return "\(base) (Conflict copy \(stamp))"
+        }
+        return "\(base) (Conflict copy \(stamp)).\(ext)"
+    }
+
+    public static func isCloudContentEdited(
+        storedMD5: String?,
+        storedSize: Int64,
+        listedMD5: String?,
+        listedSize: Int64
+    ) -> Bool {
+        if let stored = storedMD5, !stored.isEmpty,
+           let listed = listedMD5, !listed.isEmpty,
+           stored != listed {
+            return true
+        }
+        if listedSize > 0 && listedSize != storedSize {
+            return true
+        }
+        return false
+    }
+
+    private static func parseDriveModifiedTime(_ value: String?) -> Int64? {
+        guard let value, !value.isEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) {
+            return Int64(date.timeIntervalSince1970 * 1000)
+        }
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        if let date = standard.date(from: value) {
+            return Int64(date.timeIntervalSince1970 * 1000)
+        }
+        return nil
+    }
+
+    /// 3-way sync classification comparing the hydrated local file against the recorded baseline and cloud manifest.
+    public static func classifyLocalHydratedFile(
+        localSize: Int64,
+        localModifiedAt: Date?,
+        localSHA256Base64: String? = nil,
+        cloudSize: Int64,
+        cloudContentVersion: Int64,
+        cloudSHA256Base64: String? = nil,
+        baseline: LocalSyncBaseline?
+    ) -> LocalFileSyncAction {
+        if let baseline {
+            let localMtimeChanged: Bool
+            if let localMod = localModifiedAt {
+                localMtimeChanged = abs(localMod.timeIntervalSince1970 - baseline.localModifiedAt) > 0.001
+            } else {
+                localMtimeChanged = true
+            }
+            let localChanged = (localSize != baseline.localSize) || localMtimeChanged
+            let cloudChanged = (cloudContentVersion != baseline.contentVersion)
+
+            switch (localChanged, cloudChanged) {
+            case (false, false):
+                return .unchanged
+            case (true, false):
+                return .overwriteCloud
+            case (false, true):
+                return .refreshFromCloud
+            case (true, true):
+                return .conflict
+            }
+        }
+
+        if localSize == max(0, cloudSize),
+           let localHash = localSHA256Base64, !localHash.isEmpty,
+           let cloudHash = cloudSHA256Base64, !cloudHash.isEmpty,
+           localHash == cloudHash {
+            return .unchanged
+        }
+        return .conflict
+    }
+
+    /// Returns only the missing item IDs that were neither matched as moved/renamed themselves
+    /// nor descendants of a folder matched as moved/renamed in the same sync pass.
+    public static func unresolvedMissingIdsForDeletion(
+        missingItemIds: [String],
+        movedItemIds: Set<String>,
+        movedFolderIds: Set<String>,
+        parentById: [String: String?]
+    ) -> [String] {
+        missingItemIds.filter { itemId in
+            if movedItemIds.contains(itemId) {
+                return false
+            }
+            var visited: Set<String> = [itemId]
+            var cursor = parentById[itemId] ?? nil
+            while let pid = cursor, !pid.isEmpty, pid != RemoteItem.rootID, visited.insert(pid).inserted {
+                if movedFolderIds.contains(pid) {
+                    return false
+                }
+                cursor = parentById[pid] ?? nil
+            }
+            return true
+        }
+    }
+
+    func shouldSkipRecycleBinSync(for itemId: String, now: Date = Date()) -> Bool {
+        if restoringItemIds.contains(itemId) {
+            return true
+        }
+        if let restoredAt = recentlyRestoredAt[itemId] {
+            if now.timeIntervalSince(restoredAt) < Self.restoreSyncGraceSeconds {
+                return true
+            }
+            recentlyRestoredAt.removeValue(forKey: itemId)
+        }
+        return false
+    }
+
     /// Bi-directionally synchronizes folders, files, and the `Recycle Bin` across all linked Google Drive accounts (`Helium Pool Vault`).
     /// - Merges folders with the same path across 2+ linked Google Drives into a single unified folder tree in Helium and `/Volumes/Helium`.
     /// - Never re-imports files that are in Helium's 30-Day Recycle Bin (`item.deleted == true`).
     /// - Syncs renames, folder moves, and deletions/trashed items between Google Drive Web and Helium.
     @discardableResult
     public func syncExistingVaultFiles() async -> Int {
+        let pruneNow = Date()
+        recentlyRestoredAt = recentlyRestoredAt.filter { pruneNow.timeIntervalSince($0.value) < Self.restoreSyncGraceSeconds }
         let liveTransport = URLSessionGoogleDriveTransport()
         let accounts = await pool.accounts()
         // Include ALL manifests (both active AND deleted/trashed) so trashed files are never re-imported as new active files!
@@ -1321,11 +1714,14 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
                                     || canonicalName.caseInsensitiveCompare("Helium Recycle Bin") == .orderedSame) {
                         if let trashedFiles = try? await liveTransport.listFilesInFolder(account: acc, folderId: rf.id) {
                             for tf in trashedFiles {
-                                seenRecycleBinDriveFileIdsOnAccount.insert(tf.id)
                                 if let matchedPair = manifestsById.first(where: { _, m in
                                     m.segments.contains(where: { $0.driveFileId == tf.id })
                                 }) {
                                     let existingId = matchedPair.key
+                                    if shouldSkipRecycleBinSync(for: existingId) {
+                                        continue
+                                    }
+                                    seenRecycleBinDriveFileIdsOnAccount.insert(tf.id)
                                     var existingManifest = matchedPair.value
                                     if !existingManifest.item.deleted {
                                         seqCounter += 1
@@ -1349,6 +1745,7 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
                                         changedAny = true
                                     }
                                 } else if !knownDriveFileIds.contains(tf.id) {
+                                    seenRecycleBinDriveFileIdsOnAccount.insert(tf.id)
                                     knownDriveFileIds.insert(tf.id)
                                     seqCounter += 1
                                     let itemId = "pool_file_\(tf.id)"
@@ -1383,6 +1780,8 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
                                     changedAny = true
                                 }
                             }
+                        } else {
+                            allFolderListingsSucceeded = false
                         }
                         continue
                     }
@@ -1466,6 +1865,9 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
                             let existingId = matchedPair.key
                             var existingManifest = matchedPair.value
                             if existingManifest.item.deleted {
+                                if shouldSkipRecycleBinSync(for: existingId) {
+                                    continue
+                                }
                                 // Move any locally-trashed file still sitting in active Google Drive into Google Drive's Recycle Bin
                                 if let seg = existingManifest.segments.first(where: { $0.driveFileId == rf.id }),
                                    seg.accountId == acc.id,
@@ -1478,25 +1880,57 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
                                     seenActiveDriveFileIdsOnAccount.remove(rf.id)
                                     seenRecycleBinDriveFileIdsOnAccount.insert(rf.id)
                                 }
-                            } else if !existingManifest.item.nameLocked && existingManifest.segments.count == 1 {
+                            } else if !shouldSkipRecycleBinSync(for: existingId) && !inProgressReplaceItemIds.contains(existingId) {
+                                // Encrypted or multi-segment items cannot be meaningfully edited via Drive Web; only whole-file, single-segment, unencrypted files detect in-place cloud edits.
+                                let isWholeFileUnencrypted = existingManifest.item.encryption == nil
+                                    && existingManifest.placementMode == .wholeFileSmartPlacement
+                                    && existingManifest.segments.count == 1
+                                let contentEdited: Bool
+                                let needsMD5Backfill: Bool
+                                if isWholeFileUnencrypted, let seg = existingManifest.segments.first {
+                                    contentEdited = Self.isCloudContentEdited(
+                                        storedMD5: seg.md5Checksum,
+                                        storedSize: existingManifest.item.size,
+                                        listedMD5: rf.md5Checksum,
+                                        listedSize: rf.size
+                                    )
+                                    needsMD5Backfill = !contentEdited
+                                        && (seg.md5Checksum?.isEmpty ?? true)
+                                        && !(rf.md5Checksum?.isEmpty ?? true)
+                                } else {
+                                    contentEdited = false
+                                    needsMD5Backfill = false
+                                }
+
                                 // Sync any rename or folder move made directly in Google Drive Web back to Helium
                                 let currentParent = existingManifest.item.parentId ?? RemoteItem.rootID
-                                if existingManifest.item.name != rf.name || currentParent != virtualParentId {
+                                let needsRenameOrMove = !existingManifest.item.nameLocked
+                                    && existingManifest.segments.count == 1
+                                    && (existingManifest.item.name != rf.name || currentParent != virtualParentId)
+
+                                if contentEdited || needsRenameOrMove {
                                     seqCounter += 1
                                     let old = existingManifest.item
+                                    let updatedSize = rf.size > 0 ? rf.size : old.size
+                                    let updatedPlainSize = contentEdited
+                                        ? (rf.size > 0 ? rf.size : old.plainSize)
+                                        : (rf.size > 0 ? rf.size : old.plainSize)
+                                    let updatedModifiedAt = contentEdited
+                                        ? (Self.parseDriveModifiedTime(rf.modifiedTime) ?? now)
+                                        : now
                                     existingManifest.item = RemoteItem(
                                         id: old.id,
-                                        parentId: virtualParentId,
-                                        name: rf.name,
+                                        parentId: needsRenameOrMove ? virtualParentId : old.parentId,
+                                        name: needsRenameOrMove ? rf.name : old.name,
                                         nameLocked: old.nameLocked,
                                         kind: old.kind,
-                                        size: rf.size > 0 ? rf.size : old.size,
-                                        plainSize: rf.size > 0 ? rf.size : old.plainSize,
+                                        size: updatedSize,
+                                        plainSize: updatedPlainSize,
                                         mimeType: rf.mimeType,
-                                        contentVersion: old.contentVersion,
+                                        contentVersion: contentEdited ? (old.contentVersion + 1) : old.contentVersion,
                                         metadataVersion: seqCounter,
                                         createdAt: old.createdAt,
-                                        modifiedAt: now,
+                                        modifiedAt: updatedModifiedAt,
                                         deleted: false,
                                         shared: old.shared,
                                         shareUrl: old.shareUrl,
@@ -1505,20 +1939,28 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
                                         nonce: old.nonce,
                                         sealPublicKey: old.sealPublicKey
                                     )
+                                    if contentEdited, !existingManifest.segments.isEmpty {
+                                        if rf.size > 0 {
+                                            existingManifest.segments[0].byteLength = rf.size
+                                        }
+                                        existingManifest.segments[0].md5Checksum = rf.md5Checksum
+                                        existingManifest.segments[0].sha256 = nil
+                                    }
+                                    manifestsById[existingId] = existingManifest
+                                    changedAny = true
+                                } else if needsMD5Backfill {
+                                    existingManifest.segments[0].md5Checksum = rf.md5Checksum
                                     manifestsById[existingId] = existingManifest
                                     changedAny = true
                                 }
                             }
+                        } else {
+                            allFolderListingsSucceeded = false
                         }
                         continue
                     }
 
-                    // Clean up orphaned internal segment/blob files no longer referenced by any manifest, and skip part fragments from standalone import
-                    if rf.name.hasPrefix("pool_file_") && (rf.name.contains(".seg_") || rf.name.hasSuffix(".blob")) {
-                        seenActiveDriveFileIdsOnAccount.remove(rf.id)
-                        try? await liveTransport.deleteSegment(account: acc, driveFileId: rf.id)
-                        continue
-                    }
+                    // Skip unreferenced internal segment/blob files from standalone import without deleting them (may belong to an in-progress upload or another device)
                     if rf.name.contains(".seg_") || rf.name.contains(".part") || rf.name.hasPrefix("pool_file_") || rf.name.hasSuffix(".blob") {
                         continue
                     }
@@ -1546,7 +1988,8 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
                         driveFileId: rf.id,
                         logicalOffset: 0,
                         byteLength: rf.size,
-                        sha256: ""
+                        sha256: "",
+                        md5Checksum: rf.md5Checksum
                     )
                     manifestsById[itemId] = PoolItemManifest(
                         item: remoteItem,
@@ -1565,85 +2008,106 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
             )
 
             // 4. Cloud-to-Mac Deletion Sync:
-            //    - If an active file/folder on this account is no longer in `Helium Pool Vault` on Google Drive Web, mark it deleted (and if it wasn't moved into `Recycle Bin`, purge its segments so deleted Drive files never linger).
-            //    - If a Recycle Bin item was deleted from `Recycle Bin` on Google Drive Web, purge its segments so it disappears from Helium's Recycle Bin too.
+            //    - Confirm missing active segments with `checkFileTrashedOrMissing` before marking deleted; move to Helium's Recycle Bin only (never purge segments in the same pass), and abort if the mass-delete guard trips.
+            //    - For items already in Helium's Recycle Bin, remove segments only when confirmed trashed/missing by Drive.
             if rootListingSucceeded {
+                var accountActiveCount = 0
+                var pendingAccountDeletions: [(itemId: String, manifest: PoolItemManifest)] = []
+
                 for (itemId, var manifest) in manifestsById {
+                    if shouldSkipRecycleBinSync(for: itemId) {
+                        continue
+                    }
                     let accountSegments = manifest.segments.filter {
                         $0.accountId == acc.id && !$0.driveFileId.isEmpty && !$0.driveFileId.hasPrefix("gdrive_") && !$0.driveFileId.hasPrefix("gfile_")
                     }
                     guard !accountSegments.isEmpty else { continue }
 
                     if !manifest.item.deleted {
+                        accountActiveCount += 1
                         // Grace period of 15 seconds for brand-new uploads
                         if now - manifest.item.createdAt < 15_000 { continue }
-                        var missingFromActiveVault = false
-                        var movedToCloudRecycleBin = false
-                        for seg in accountSegments where !seenActiveDriveFileIdsOnAccount.contains(seg.driveFileId) {
+
+                        let missingSegments = accountSegments.filter { !seenActiveDriveFileIdsOnAccount.contains($0.driveFileId) }
+                        guard !missingSegments.isEmpty else { continue }
+
+                        var allMissingConfirmed = true
+                        for seg in missingSegments {
                             if seenRecycleBinDriveFileIdsOnAccount.contains(seg.driveFileId) {
-                                missingFromActiveVault = true
-                                movedToCloudRecycleBin = true
-                            } else if allFolderListingsSucceeded {
-                                missingFromActiveVault = true
-                            } else {
-                                let confirmedTrashed = await liveTransport.checkFileTrashedOrMissing(
-                                    account: acc,
-                                    driveFileId: seg.driveFileId
-                                )
-                                if confirmedTrashed {
-                                    missingFromActiveVault = true
-                                }
+                                continue
+                            }
+                            let confirmedTrashed = await liveTransport.checkFileTrashedOrMissing(
+                                account: acc,
+                                driveFileId: seg.driveFileId
+                            )
+                            if !confirmedTrashed {
+                                allMissingConfirmed = false
+                                break
                             }
                         }
 
-                        if missingFromActiveVault {
-                            seqCounter += 1
-                            let old = manifest.item
-                            manifest.item = RemoteItem(
-                                id: old.id,
-                                parentId: old.parentId,
-                                name: old.name,
-                                nameLocked: old.nameLocked,
-                                kind: old.kind,
-                                size: old.size,
-                                plainSize: old.plainSize,
-                                mimeType: old.mimeType,
-                                contentVersion: old.contentVersion,
-                                metadataVersion: seqCounter,
-                                createdAt: old.createdAt,
-                                modifiedAt: now,
-                                deleted: true,
-                                shared: old.shared,
-                                shareUrl: old.shareUrl,
-                                encryption: old.encryption,
-                                wrappedKey: old.wrappedKey,
-                                nonce: old.nonce,
-                                sealPublicKey: old.sealPublicKey
-                            )
-                            if !movedToCloudRecycleBin {
-                                // Deleted directly in Google Drive Web (not in Helium Recycle Bin) -> clear segments so it is purged
-                                manifest.segments.removeAll { $0.accountId == acc.id && !seenRecycleBinDriveFileIdsOnAccount.contains($0.driveFileId) }
-                            }
-                            manifestsById[itemId] = manifest
-                            changedAny = true
+                        if allMissingConfirmed {
+                            pendingAccountDeletions.append((itemId: itemId, manifest: manifest))
                         }
                     } else if allFolderListingsSucceeded {
-                        // Item is in Helium's Recycle Bin (`deleted == true`); if user also deleted it from Google Drive's `Recycle Bin`, remove its segments
-                        let beforeCount = manifest.segments.count
-                        manifest.segments.removeAll { seg in
+                        // Item is in Helium's Recycle Bin (`deleted == true`); confirm before removing segments
+                        var keptSegments: [PoolSegment] = []
+                        keptSegments.reserveCapacity(manifest.segments.count)
+                        for seg in manifest.segments {
                             guard seg.accountId == acc.id,
                                   !seg.driveFileId.isEmpty,
                                   !seg.driveFileId.hasPrefix("gdrive_"),
-                                  !seg.driveFileId.hasPrefix("gfile_") else {
-                                return false
+                                  !seg.driveFileId.hasPrefix("gfile_"),
+                                  !seenRecycleBinDriveFileIdsOnAccount.contains(seg.driveFileId),
+                                  !seenActiveDriveFileIdsOnAccount.contains(seg.driveFileId) else {
+                                keptSegments.append(seg)
+                                continue
                             }
-                            return !seenRecycleBinDriveFileIdsOnAccount.contains(seg.driveFileId)
-                                && !seenActiveDriveFileIdsOnAccount.contains(seg.driveFileId)
+                            let confirmedGone = await liveTransport.checkFileTrashedOrMissing(
+                                account: acc,
+                                driveFileId: seg.driveFileId
+                            )
+                            if !confirmedGone {
+                                keptSegments.append(seg)
+                            }
                         }
-                        if manifest.segments.count != beforeCount {
+                        if keptSegments.count != manifest.segments.count {
+                            manifest.segments = keptSegments
                             manifestsById[itemId] = manifest
                             changedAny = true
                         }
+                    }
+                }
+
+                if Self.shouldAbortMassDelete(candidateCount: pendingAccountDeletions.count, totalActiveCount: accountActiveCount) {
+                    Self.logger.error("Aborted cloud-to-Mac mass deletion on account \(acc.id, privacy: .public): \(pendingAccountDeletions.count) of \(accountActiveCount) active items flagged")
+                } else {
+                    for (itemId, var manifest) in pendingAccountDeletions {
+                        seqCounter += 1
+                        let old = manifest.item
+                        manifest.item = RemoteItem(
+                            id: old.id,
+                            parentId: old.parentId,
+                            name: old.name,
+                            nameLocked: old.nameLocked,
+                            kind: old.kind,
+                            size: old.size,
+                            plainSize: old.plainSize,
+                            mimeType: old.mimeType,
+                            contentVersion: old.contentVersion,
+                            metadataVersion: seqCounter,
+                            createdAt: old.createdAt,
+                            modifiedAt: now,
+                            deleted: true,
+                            shared: old.shared,
+                            shareUrl: old.shareUrl,
+                            encryption: old.encryption,
+                            wrappedKey: old.wrappedKey,
+                            nonce: old.nonce,
+                            sealPublicKey: old.sealPublicKey
+                        )
+                        manifestsById[itemId] = manifest
+                        changedAny = true
                     }
                 }
             }
@@ -1997,14 +2461,14 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
         manifestsById[id] = manifest
 
         var segmentsToRecycle = manifest.segments
-        // Also mark any duplicate active manifests with the same parent and canonical name as deleted
+        // Also mark any duplicate active manifests with the same parent and exact canonical name as deleted
         let targetParentId = old.parentId ?? RemoteItem.rootID
-        let targetCanonicalName = old.name.precomposedStringWithCanonicalMapping.lowercased()
+        let targetCanonicalName = old.name.precomposedStringWithCanonicalMapping
         for (otherId, var otherManifest) in manifestsById where otherId != id && !otherManifest.item.deleted {
             let otherParentId = otherManifest.item.parentId ?? RemoteItem.rootID
             if otherParentId == targetParentId &&
                otherManifest.item.kind == old.kind &&
-               otherManifest.item.name.precomposedStringWithCanonicalMapping.lowercased() == targetCanonicalName {
+               otherManifest.item.name.precomposedStringWithCanonicalMapping == targetCanonicalName {
                 seqCounter += 1
                 let otherOld = otherManifest.item
                 otherManifest.item = RemoteItem(
@@ -2058,6 +2522,81 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
     /// and moves its Google Drive files out of `Recycle Bin` back into the active `Helium Pool Vault` folder.
     @discardableResult
     public func restoreFromTrash(id: String) async -> PoolItemManifest? {
+        guard let initialManifest = manifestsById[id] else { return nil }
+        guard !restoringItemIds.contains(id) else {
+            Self.logger.warning("Restore already in progress for item \(id, privacy: .public)")
+            return nil
+        }
+
+        restoringItemIds.insert(id)
+        defer { restoringItemIds.remove(id) }
+
+        // Move underlying Google Drive segments out of `Recycle Bin` first before marking active.
+        let transport = URLSessionGoogleDriveTransport()
+        var movedSegments: [(account: LinkedGoogleAccount, driveFileId: String)] = []
+        var moveFailed = false
+
+        for seg in initialManifest.segments where !seg.driveFileId.isEmpty && !seg.driveFileId.hasPrefix("gdrive_") {
+            guard let rawAcc = await pool.account(id: seg.accountId) else {
+                Self.logger.error("Restore failed for item \(id, privacy: .public): linked account \(seg.accountId, privacy: .public) not found for driveFileId=\(seg.driveFileId, privacy: .public)")
+                moveFailed = true
+                break
+            }
+            if rawAcc.refreshToken.hasPrefix("rt_") {
+                continue
+            }
+
+            var acc = await ensureValidToken(for: rawAcc)
+            let targetFolderId = await resolveGoogleDriveFolderId(
+                for: acc,
+                virtualFolderId: initialManifest.item.parentId ?? RemoteItem.rootID
+            )
+
+            do {
+                try await transport.moveFileBetweenFolders(
+                    account: acc,
+                    driveFileId: seg.driveFileId,
+                    targetFolderId: targetFolderId
+                )
+                movedSegments.append((account: acc, driveFileId: seg.driveFileId))
+            } catch let GoogleDriveTransportError.httpError(statusCode, _) where statusCode == 401 {
+                acc = await ensureValidToken(for: acc, forceRefresh: true)
+                do {
+                    try await transport.moveFileBetweenFolders(
+                        account: acc,
+                        driveFileId: seg.driveFileId,
+                        targetFolderId: targetFolderId
+                    )
+                    movedSegments.append((account: acc, driveFileId: seg.driveFileId))
+                } catch {
+                    Self.logger.error("Restore failed moving driveFileId=\(seg.driveFileId, privacy: .public) on account \(acc.id, privacy: .public) after token refresh: \(error.localizedDescription, privacy: .public)")
+                    moveFailed = true
+                    break
+                }
+            } catch {
+                Self.logger.error("Restore failed moving driveFileId=\(seg.driveFileId, privacy: .public) on account \(acc.id, privacy: .public) to folder \(targetFolderId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                moveFailed = true
+                break
+            }
+        }
+
+        if moveFailed {
+            for moved in movedSegments {
+                do {
+                    let acc = await ensureValidToken(for: moved.account)
+                    let recycleBinId = try await transport.ensureRecycleBinFolder(account: acc)
+                    try await transport.moveFileBetweenFolders(
+                        account: acc,
+                        driveFileId: moved.driveFileId,
+                        targetFolderId: recycleBinId
+                    )
+                } catch {
+                    Self.logger.error("Best-effort rollback to Recycle Bin failed for driveFileId=\(moved.driveFileId, privacy: .public) on account \(moved.account.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            return nil
+        }
+
         guard var manifest = manifestsById[id] else { return nil }
         seqCounter += 1
         let old = manifest.item
@@ -2083,28 +2622,80 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
             sealPublicKey: old.sealPublicKey
         )
         manifestsById[id] = manifest
+        let completedAt = Date()
+        recentlyRestoredAt = recentlyRestoredAt.filter { completedAt.timeIntervalSince($0.value) < Self.restoreSyncGraceSeconds }
+        recentlyRestoredAt[id] = completedAt
         persistManifests()
         await reconcileAccountPoolUsage()
+        return manifest
+    }
 
-        // Move underlying Google Drive segments out of `Recycle Bin` back into their target folder
-        let transport = URLSessionGoogleDriveTransport()
-        for seg in manifest.segments where !seg.driveFileId.isEmpty && !seg.driveFileId.hasPrefix("gdrive_") {
-            if let rawAcc = await pool.account(id: seg.accountId),
-               !rawAcc.refreshToken.isEmpty,
-               !rawAcc.refreshToken.hasPrefix("rt_") {
-                let acc = await ensureValidToken(for: rawAcc)
-                let targetFolderId = await resolveGoogleDriveFolderId(
-                    for: acc,
-                    virtualFolderId: manifest.item.parentId ?? RemoteItem.rootID
-                )
-                try? await transport.moveFileBetweenFolders(
-                    account: acc,
-                    driveFileId: seg.driveFileId,
-                    targetFolderId: targetFolderId
-                )
+    /// Restores `id` from the 30-day Trash along with any deleted parent folder chain (restored first)
+    /// and, when `id` is a folder, any children trashed within 60 seconds of the folder.
+    public func restoreWithHierarchy(id: String) async -> [PoolItemManifest] {
+        guard let target = manifestsById[id] else { return [] }
+
+        // 1. Collect deleted ancestor folders (top-most first)
+        var ancestorsToRestore: [String] = []
+        var visitedAncestors: Set<String> = [id]
+        var cursorParentId = target.item.parentId
+        while let pid = cursorParentId,
+              pid != RemoteItem.rootID,
+              !pid.isEmpty,
+              visitedAncestors.insert(pid).inserted,
+              let parentManifest = manifestsById[pid] {
+            if parentManifest.item.deleted {
+                ancestorsToRestore.insert(pid, at: 0)
+            }
+            cursorParentId = parentManifest.item.parentId
+        }
+
+        // 2. Restore trashed parent chain first
+        var restored: [PoolItemManifest] = []
+        for ancestorId in ancestorsToRestore {
+            guard let restoredAncestor = await restoreFromTrash(id: ancestorId) else {
+                return []
+            }
+            restored.append(restoredAncestor)
+        }
+
+        // 3. Restore the requested item itself
+        guard let restoredTarget = await restoreFromTrash(id: id) else {
+            return restored
+        }
+        restored.append(restoredTarget)
+
+        // 4. If restoring a folder, also restore children trashed with it (modifiedAt within 60s)
+        if target.item.kind == .folder {
+            let folderTrashTimeMs = target.item.modifiedAt
+            let snapshotManifests = Array(manifestsById.values)
+            var childIdsToRestore: [String] = []
+            var queue: [String] = [id]
+            var visited: Set<String> = [id]
+
+            while !queue.isEmpty {
+                let currentFolderId = queue.removeFirst()
+                let matchingChildren = snapshotManifests.filter { m in
+                    m.item.deleted
+                        && m.item.parentId == currentFolderId
+                        && abs(m.item.modifiedAt - folderTrashTimeMs) <= 60_000
+                }
+                for child in matchingChildren where visited.insert(child.item.id).inserted {
+                    childIdsToRestore.append(child.item.id)
+                    if child.item.kind == .folder {
+                        queue.append(child.item.id)
+                    }
+                }
+            }
+
+            for childId in childIdsToRestore {
+                if let restoredChild = await restoreFromTrash(id: childId) {
+                    restored.append(restoredChild)
+                }
             }
         }
-        return manifest
+
+        return restored
     }
 
     /// Returns all items currently in the 30-day Trash.
@@ -2255,8 +2846,10 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
                 progress?(baseCompleted + chunkBytesSent)
             }
             let digest = SHA256.hash(data: segBytes)
+            let md5Digest = Insecure.MD5.hash(data: segBytes)
             seg.driveFileId = driveFileId
             seg.sha256 = ZK.b64(Data(digest))
+            seg.md5Checksum = md5Digest.map { String(format: "%02x", $0) }.joined()
             uploadedSegments.append(seg)
 
             await pool.recordUsageDelta(accountId: targetAccount.id, deltaBytes: seg.byteLength)
@@ -2309,45 +2902,90 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
         guard let existing = manifestsById[id] else {
             throw CocoaError(.fileNoSuchFile)
         }
-        // Reclaim old segments first
-        for oldSeg in existing.segments {
-            if let acc = await pool.account(id: oldSeg.accountId), !oldSeg.driveFileId.isEmpty {
-                try? await pool.transport.deleteSegment(account: acc, driveFileId: oldSeg.driveFileId)
-                await pool.recordUsageDelta(accountId: acc.id, deltaBytes: -oldSeg.byteLength)
-            }
+        guard expectedVersion == existing.item.contentVersion else {
+            throw PoolConflictError.versionMismatch(
+                expected: expectedVersion,
+                actual: existing.item.contentVersion
+            )
         }
+        inProgressReplaceItemIds.insert(id)
+        defer { inProgressReplaceItemIds.remove(id) }
 
         let accounts = await pool.accounts()
         let isEncrypted = (secrets?.wrapped != nil)
-        let plan = try allocator.allocate(totalBytes: source.size, encrypted: isEncrypted, accounts: accounts)
-
-        var uploadedSegments: [PoolSegment] = []
-        var completedSegmentsBytes: Int64 = 0
-        for var seg in plan.segments {
-            guard let targetAccount = await pool.account(id: seg.accountId) else {
-                throw PoolAllocationError.noLinkedAccounts
+        let plan: AllocationPlan
+        do {
+            plan = try allocator.allocate(totalBytes: source.size, encrypted: isEncrypted, accounts: accounts)
+        } catch PoolAllocationError.insufficientPooledStorage {
+            // Reclaimable quota from existing segments allows replacement when old+new temporarily overlap.
+            var oldBytesByAccount: [String: Int64] = [:]
+            for oldSeg in existing.segments {
+                oldBytesByAccount[oldSeg.accountId, default: 0] += max(0, oldSeg.byteLength)
             }
-            let segBytes = seg.byteLength > 0
-                ? try source.read(offset: seg.logicalOffset, length: Int(seg.byteLength))
-                : Data()
-            let segFilename = plan.mode == .wholeFileSmartPlacement
-                ? existing.item.name
-                : "\(existing.item.name).part\(String(format: "%04d", seg.index + 1))"
-            let baseCompleted = completedSegmentsBytes
-            let driveFileId = try await uploadSegmentWithAutoRefresh(
-                account: targetAccount,
-                name: segFilename,
-                data: segBytes
-            ) { chunkBytesSent in
-                progress?(baseCompleted + chunkBytesSent)
+            let adjustedAccounts = accounts.map { acc in
+                var copy = acc
+                let reclaimable = oldBytesByAccount[acc.id] ?? 0
+                copy.quotaUsedBytes = max(0, copy.quotaUsedBytes - reclaimable)
+                copy.heliumUsedBytes = max(0, copy.heliumUsedBytes - reclaimable)
+                return copy
             }
-            seg.driveFileId = driveFileId
-            uploadedSegments.append(seg)
-            await pool.recordUsageDelta(accountId: targetAccount.id, deltaBytes: seg.byteLength)
-            completedSegmentsBytes += seg.byteLength
-            progress?(completedSegmentsBytes)
+            plan = try allocator.allocate(totalBytes: source.size, encrypted: isEncrypted, accounts: adjustedAccounts)
         }
 
+        // Upload all new segments first; if any upload fails, clean up partial new segments and leave old ones intact.
+        var uploadedSegments: [PoolSegment] = []
+        var completedSegmentsBytes: Int64 = 0
+        do {
+            for var seg in plan.segments {
+                guard let targetAccount = await pool.account(id: seg.accountId) else {
+                    throw PoolAllocationError.noLinkedAccounts
+                }
+                let segBytes = seg.byteLength > 0
+                    ? try source.read(offset: seg.logicalOffset, length: Int(seg.byteLength))
+                    : Data()
+                let segFilename = plan.mode == .wholeFileSmartPlacement
+                    ? existing.item.name
+                    : "\(existing.item.name).part\(String(format: "%04d", seg.index + 1))"
+                let targetFolderId = await resolveGoogleDriveFolderId(
+                    for: targetAccount,
+                    virtualFolderId: existing.item.parentId ?? RemoteItem.rootID
+                )
+                let baseCompleted = completedSegmentsBytes
+                let driveFileId = try await uploadSegmentWithAutoRefresh(
+                    account: targetAccount,
+                    name: segFilename,
+                    parentFolderId: targetFolderId,
+                    data: segBytes
+                ) { chunkBytesSent in
+                    progress?(baseCompleted + chunkBytesSent)
+                }
+                let digest = SHA256.hash(data: segBytes)
+                let md5Digest = Insecure.MD5.hash(data: segBytes)
+                seg.driveFileId = driveFileId
+                seg.sha256 = ZK.b64(Data(digest))
+                seg.md5Checksum = md5Digest.map { String(format: "%02x", $0) }.joined()
+                uploadedSegments.append(seg)
+                await pool.recordUsageDelta(accountId: targetAccount.id, deltaBytes: seg.byteLength)
+                completedSegmentsBytes += seg.byteLength
+                progress?(completedSegmentsBytes)
+            }
+        } catch {
+            for newSeg in uploadedSegments where !newSeg.driveFileId.isEmpty {
+                if let rawAcc = await pool.account(id: newSeg.accountId) {
+                    let acc = await ensureValidToken(for: rawAcc)
+                    do {
+                        try await pool.transport.deleteSegment(account: acc, driveFileId: newSeg.driveFileId)
+                        await pool.recordUsageDelta(accountId: acc.id, deltaBytes: -newSeg.byteLength)
+                    } catch {
+                        Self.logger.error("Failed best-effort cleanup of replacement segment \(newSeg.driveFileId, privacy: .public) on account \(acc.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+            }
+            await reconcileAccountPoolUsage()
+            throw error
+        }
+
+        let oldSegments = existing.segments
         seqCounter += 1
         let updatedItem = RemoteItem(
             id: existing.item.id,
@@ -2376,6 +3014,19 @@ public actor PooledGoogleDriveRemote: LockableRemote, KeysRemote, ShareRemote {
             segments: uploadedSegments
         )
         persistManifests()
+
+        // Delete superseded old segments (best effort; do not fail after manifest update)
+        for oldSeg in oldSegments where !oldSeg.driveFileId.isEmpty {
+            if let rawAcc = await pool.account(id: oldSeg.accountId) {
+                let acc = await ensureValidToken(for: rawAcc)
+                do {
+                    try await pool.transport.deleteSegment(account: acc, driveFileId: oldSeg.driveFileId)
+                    await pool.recordUsageDelta(accountId: acc.id, deltaBytes: -oldSeg.byteLength)
+                } catch {
+                    Self.logger.error("Failed best-effort deletion of old segment \(oldSeg.driveFileId, privacy: .public) on account \(acc.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
         await reconcileAccountPoolUsage()
         return updatedItem
     }

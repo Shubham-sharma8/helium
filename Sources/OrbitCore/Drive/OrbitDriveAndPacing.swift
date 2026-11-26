@@ -270,13 +270,29 @@ public final class OrbitDrive: @unchecked Sendable {
 
         let remoteItem: RemoteItem
         if let existingRemoteID = node.remoteID {
-            remoteItem = try await remote.uploadOverwrite(
-                id: existingRemoteID,
-                from: stageURL,
-                expectedVersion: node.contentVersion,
-                modifiedAt: node.modifiedAt,
-                progress: nil
-            )
+            do {
+                remoteItem = try await remote.uploadOverwrite(
+                    id: existingRemoteID,
+                    from: stageURL,
+                    expectedVersion: node.contentVersion,
+                    modifiedAt: node.modifiedAt,
+                    progress: nil
+                )
+            } catch PoolConflictError.versionMismatch {
+                let conflictName = PooledGoogleDriveRemote.makeConflictCopyFilename(for: node.name)
+                let conflictItem = try await remote.uploadNewFile(
+                    from: stageURL,
+                    name: conflictName,
+                    parentId: parentRemoteID,
+                    clientId: UUID().uuidString,
+                    modifiedAt: node.modifiedAt,
+                    link: false,
+                    progress: nil
+                )
+                _ = tree.apply([conflictItem], seq: max(tree.seq, conflictItem.metadataVersion), complete: false)
+                tree.save()
+                return node
+            }
         } else {
             remoteItem = try await remote.uploadNewFile(
                 from: stageURL,

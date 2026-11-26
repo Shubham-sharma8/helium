@@ -308,10 +308,13 @@ public final class DriveTree: @unchecked Sendable {
                 }
                 existing.parentID = parentInode
                 existing.name = item.name
-                existing.size = item.size
-                existing.contentVersion = item.contentVersion
+                // Preserve base contentVersion/size/modifiedAt while un-flushed staged writes are pending.
+                if !existing.dirtyContent {
+                    existing.size = item.size
+                    existing.contentVersion = item.contentVersion
+                    existing.modifiedAt = modifiedDate
+                }
                 existing.metadataVersion = item.metadataVersion
-                existing.modifiedAt = modifiedDate
                 existing.shared = item.shared
                 existing.shareURL = item.shareUrl
                 nodesByID[existingID] = existing
